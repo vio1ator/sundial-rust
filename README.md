@@ -187,9 +187,9 @@ cargo clippy
 cargo fmt --check
 ```
 
-Test results: ✅ **50 tests passed**
-- 37 unit tests (model components, data processing)
-- 13 integration tests (CLI functionality, file I/O)
+Test results: ✅ **85 tests total** (56 library tests, 15 binary tests, 14 integration tests)
+
+**Note:** One integration test (`test_full_build_verification`) may fail if the build script hasn't been run with the `--lib` flag.
 
 ## 🔬 Comparison with Python Implementation
 
@@ -226,7 +226,8 @@ src/
 ├── flow/
 │   ├── network.rs       # Flow matching network
 │   ├── sampling.rs      # Flow matching inference
-│   └── resblock.rs      # Residual blocks
+│   ├── resblock.rs      # Residual blocks
+│   └── timestep_embed.rs  # Timestep embeddings
 ├── data/
 │   └── mod.rs           # Data loading & preprocessing
 └── bin/
@@ -257,13 +258,18 @@ sundial-rust/
 │   ├── model/              # Model architecture
 │   ├── flow/               # Flow matching
 │   ├── data/               # Data handling
+│   ├── weights/            # Weight loading utilities
+│   ├── assets/             # Embedded weights (US-002)
 │   └── bin/                # CLI binary
 ├── weights/                # Pre-trained model weights
 │   └── model.safetensors   # sundial-base-128m (490MB)
 ├── examples/               # Example programs
 ├── scripts/                # Python comparison scripts
 ├── test_data/              # Sample datasets
-└── tasks/                  # Feature development tasks
+├── tasks/                  # Feature development tasks
+├── archive-docs/           # Historical implementation docs
+├── build.rs                # Build script for weight compression
+└── tests/                  # Integration tests
 ```
 
 ### Adding New Features
