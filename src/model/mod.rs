@@ -1,0 +1,47 @@
+//! Sundial model architecture implementation
+//!
+//! This module contains the Rust implementation of the Sundial time series
+//! forecasting model, originally implemented in PyTorch.
+
+pub mod attention;
+pub mod config;
+pub mod decoder_layer;
+pub mod loader;
+pub mod mlp;
+pub mod patch_embed;
+pub mod rope;
+pub mod sundial;
+pub mod transformer;
+
+mod layers;
+
+pub use config::SundialConfig;
+pub use sundial::SundialModel;
+
+// Re-export for convenience
+pub use attention::SundialAttention;
+pub use decoder_layer::SundialDecoderLayer;
+pub use mlp::SundialMLP;
+pub use patch_embed::SundialPatchEmbedding;
+pub use rope::SundialRotaryEmbedding;
+pub use transformer::SundialTransformer;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::Device;
+
+    #[test]
+    fn test_config_defaults() {
+        let config = SundialConfig::default();
+        assert_eq!(config.input_token_len, 16);
+        assert_eq!(config.hidden_size, 768);
+        assert_eq!(config.num_hidden_layers, 12);
+    }
+
+    #[test]
+    fn test_head_dim_calculation() {
+        let config = SundialConfig::default();
+        assert_eq!(config.head_dim(), 64); // 768 / 12
+    }
+}

@@ -1,0 +1,205 @@
+//! Patch embedding layer for Sundial
+//!
+//! Converts raw time series into patch tokens with residual connections.
+//! This matches the SundialPatchEmbedding from the Python implementation.
+
+use crate::debug_utils;
+use crate::model::config::SundialConfig;
+use candle_core::{Result, Tensor};
+use candle_nn::{Linear, Module};
+
+/// Patch embedding layer that converts time series into tokens
+pub struct SundialPatchEmbedding {
+    dropout: f64,
+    hidden_layer: Linear,
+    act_fn: String,
+    output_layer: Linear,
+    residual_layer: Linear,
+    input_token_len: usize,
+}
+
+impl SundialPatchEmbedding {
+    /// Create a new patch embedding layer
+    pub fn new(config: &SundialConfig, vb: candle_nn::VarBuilder) -> Result<Self> {
+        let input_dim = config.input_token_len * 2; // values + mask
+
+        // Initialize with Xavier uniform
+        let hidden_weight = vb.get((config.intermediate_size, input_dim), "hidden_layer.weight")?;
+        let hidden_bias = vb.get(config.intermediate_size, "hidden_layer.bias")?;
+        let hidden_layer = Linear::new(hidden_weight, Some(hidden_bias));
+
+        let output_weight = vb.get(
+            (config.hidden_size, config.intermediate_size),
+            "output_layer.weight",
+        )?;
+        let output_layer = Linear::new(output_weight, None); // bias=False
+
+        let res_weight = vb.get((config.hidden_size, input_dim), "residual_layer.weight")?;
+        let res_bias = vb.get(config.hidden_size, "residual_layer.bias")?;
+        let residual_layer = Linear::new(res_weight, Some(res_bias));
+
+        Ok(Self {
+            dropout: config.dropout_rate,
+            hidden_layer,
+            act_fn: config.hidden_act.clone(),
+            output_layer,
+            residual_layer,
+            input_token_len: config.input_token_len,
+        })
+    }
+
+    /// Apply SiLU activation
+    fn silu(x: &Tensor) -> Result<Tensor> {
+        candle_nn::ops::sigmoid(x)?.mul(x)
+    }
+
+    /// Apply ReLU activation
+    fn relu(x: &Tensor) -> Result<Tensor> {
+        x.relu()
+    }
+
+    /// Apply the activation function based on config
+    fn apply_activation(x: &Tensor, act_fn: &str) -> Result<Tensor> {
+        match act_fn {
+            "silu" => Self::silu(x),
+            "relu" => Self::relu(x),
+            _ => Err(candle_core::Error::Msg(format!(
+                "Unsupported activation: {}",
+                act_fn
+            ))),
+        }
+    }
+
+    /// Pad tensor on the right to make length divisible by target
+    fn pad_right(x: &Tensor, target_len: usize) -> Result<Tensor> {
+        let current_len = x.dim(1)?;
+        let padding = (target_len - (current_len % target_len)) % target_len;
+
+        if padding == 0 {
+            Ok(x.clone())
+        } else {
+            // Pad with zeros on the right
+            let pad_shape: Vec<usize> = vec![x.dim(0)?, padding];
+            let zeros = Tensor::zeros(pad_shape, x.dtype(), x.device())?;
+            Tensor::cat(&[x, &zeros], 1)
+        }
+    }
+
+    /// Unfold tensor into patches
+    /// Input: [batch, seq_len]
+    /// Output: [batch, num_patches, patch_len]
+    fn unfold_patches(x: &Tensor, patch_len: usize, step: usize) -> Result<Tensor> {
+        let (batch, seq_len) = x.dims2()?;
+
+        // For 2D tensor, we need to use unfold operation
+        // candle doesn't have direct unfold, so we do it manually
+        let num_patches = (seq_len - patch_len) / step + 1;
+
+        let mut patches = Vec::with_capacity(batch * num_patches * patch_len);
+
+        for b in 0..batch {
+            for p in 0..num_patches {
+                let start = p * step;
+                for i in 0..patch_len {
+                    let val = x.get(b)?.get(start + i)?.to_scalar::<f32>()?;
+                    patches.push(val);
+                }
+            }
+        }
+
+        Tensor::from_vec(patches, (batch, num_patches, patch_len), x.device())
+    }
+}
+
+impl Module for SundialPatchEmbedding {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        // Debug: print input
+        if std::env::var("SUNDIAL_DEBUG").is_ok() {
+            debug_utils::debug_tensor("patch_embed_input", x);
+        }
+
+        let batch_size = x.dim(0)?;
+
+        // Step 1: Pad input to be divisible by input_token_len
+        let x_padded = Self::pad_right(x, self.input_token_len)?;
+        let (_, padded_len) = x_padded.dims2()?;
+
+        // Step 2: Create mask (all ones for valid data)
+        let mask = Tensor::ones((batch_size, padded_len), x.dtype(), x.device())?;
+
+        // Step 3: Unfold into patches
+        let x_patches =
+            Self::unfold_patches(&x_padded, self.input_token_len, self.input_token_len)?;
+        let mask_patches = Self::unfold_patches(&mask, self.input_token_len, self.input_token_len)?;
+
+        let (_, num_patches, patch_len) = x_patches.dims3()?;
+
+        // Step 4: Reshape for concatenation and concatenate patches with mask
+        let x_reshaped = x_patches.reshape((batch_size * num_patches, patch_len))?;
+        let mask_reshaped = mask_patches.reshape((batch_size * num_patches, patch_len))?;
+
+        // Concatenate along the last dimension: [batch * num_patches, patch_len * 2]
+        let concatenated = Tensor::cat(&[&x_reshaped, &mask_reshaped], 1)?;
+
+        // Step 5: Apply hidden layer with activation
+        let hid = self.hidden_layer.forward(&concatenated)?;
+        let hid = Self::apply_activation(&hid, &self.act_fn)?;
+
+        // Step 6: Apply dropout (skip during inference)
+        // For now, we'll skip dropout in forward pass
+        // In training mode, we'd apply: hid = hid * (1 - dropout) + noise
+
+        // Step 7: Apply output layer
+        let out = self.output_layer.forward(&hid)?;
+
+        // Step 8: Apply residual connection
+        let res = self.residual_layer.forward(&concatenated)?;
+        let out = out.broadcast_add(&res)?;
+
+        // Reshape back to [batch, num_patches, hidden_size]
+        let (_, hidden_size) = out.dims2()?;
+        let result = out.reshape((batch_size, num_patches, hidden_size))?;
+
+        // Debug: print output
+        if std::env::var("SUNDIAL_DEBUG").is_ok() {
+            debug_utils::debug_tensor("patch_embed_output", &result);
+        }
+
+        Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::{DType, Device};
+
+    #[test]
+    fn test_patch_embedding_creation() {
+        let config = SundialConfig::default();
+        let device = Device::Cpu;
+        let vb = candle_nn::VarBuilder::from_varmap(&candle_nn::VarMap::new(), DType::F32, &device);
+
+        let embedding = SundialPatchEmbedding::new(&config, vb);
+        assert!(embedding.is_ok());
+    }
+
+    #[test]
+    fn test_patch_embedding_forward() {
+        let config = SundialConfig {
+            input_token_len: 16,
+            hidden_size: 64,
+            intermediate_size: 128,
+            ..Default::default()
+        };
+        let device = Device::Cpu;
+        let vb = candle_nn::VarBuilder::from_varmap(&candle_nn::VarMap::new(), DType::F32, &device);
+        let embedding = SundialPatchEmbedding::new(&config, vb).unwrap();
+
+        // Input: [batch=2, seq_len=64] (4 patches of 16)
+        let input = Tensor::randn(0.0f32, 1.0f32, (2, 64), &device).unwrap();
+        let output = embedding.forward(&input).unwrap();
+
+        assert_eq!(output.dims(), &[2, 4, 64]); // [batch, num_patches, hidden_size]
+    }
+}

@@ -1,0 +1,19 @@
+{
+  "input_token_len": 16,
+  "hidden_size": 768,
+  "intermediate_size": 3072,
+  "output_token_lens": [720],
+  "num_hidden_layers": 12,
+  "num_attention_heads": 12,
+  "hidden_act": "silu",
+  "use_cache": true,
+  "rope_theta": 10000.0,
+  "dropout_rate": 0.1,
+  "initializer_range": 0.02,
+  "max_position_embeddings": 10000,
+  "flow_loss_depth": 3,
+  "num_sampling_steps": 50,
+  "diffusion_batch_mul": 4,
+  "debug_mode": false,
+  "debug_layer": null
+}

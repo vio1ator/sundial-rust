@@ -1,0 +1,128 @@
+//! Flow matching sampling
+//! 
+//! Implements Euler integration for generating samples from the flow model.
+//! Matches the FlowLoss.sample method from the Python implementation.
+
+use candle_core::{Tensor, Result, DType};
+
+/// Sample from the flow model using Euler integration
+/// 
+/// # Arguments
+/// * `net` - The flow network
+/// * `z` - Condition vector of shape [batch, z_channels]
+/// * `num_samples` - Number of samples to generate
+/// * `in_channels` - Number of output channels (forecast length)
+/// * `num_sampling_steps` - Number of integration steps
+/// 
+/// # Returns
+/// Tensor of shape [num_samples, batch, in_channels]
+pub fn flow_sample(
+    net: &crate::flow::network::SimpleMLPAdaLN,
+    z: &Tensor,
+    num_samples: usize,
+    in_channels: usize,
+    num_sampling_steps: usize,
+) -> Result<Tensor> {
+    let device = z.device();
+    let batch_size = z.dim(0)?;
+    
+    // Repeat condition for multiple samples
+    let z = z.repeat(num_samples)?;
+    let batch_size_multiplied = z.dim(0)?; // Now batch_size * num_samples
+    
+    // Initialize with noise ~ N(0, I)
+    let mut x = Tensor::randn(0.0, 1.0, (batch_size_multiplied, in_channels), device)?;
+    let noise = x.clone();
+    
+    // Euler integration
+    let dt = 1.0 / num_sampling_steps as f32;
+    
+    for i in 0..num_sampling_steps {
+        // Create timestep tensor: t = i / num_sampling_steps
+        let t_val = (i as f32) / (num_sampling_steps as f32);
+        let t = Tensor::full(t_val, (batch_size_multiplied,), device)?;
+        
+        // Predict velocity
+        let pred = net.forward(&x, &t, &z)?;
+        
+        // Update: x = x + (pred - noise) * dt
+        let diff = pred.sub(&noise)?;
+        let dt_tensor = Tensor::new(dt as f32, device)?;
+        x = x.add(&diff.broadcast_mul(&dt_tensor)?)?
+    }
+    
+    // Reshape to [num_samples, batch, in_channels]
+    // Currently: [num_samples * batch, in_channels]
+    x.reshape((num_samples, batch_size, in_channels))
+}
+
+/// Sample with revin denormalization
+/// 
+/// # Arguments
+/// * `predictions` - Raw predictions of shape [num_samples, batch, forecast_length]
+/// * `stdev` - Standard deviation for denormalization
+/// * `means` - Mean for denormalization
+/// 
+/// # Returns
+/// Denormalized predictions
+pub fn denormalize_predictions(
+    predictions: &Tensor,
+    stdev: &Tensor,
+    means: &Tensor,
+) -> Result<Tensor> {
+    // predictions * stdev + means
+    predictions.mul(stdev)?.add(means)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::{Device, DType};
+    
+    #[test]
+    fn test_flow_sample_shape() {
+        let device = Device::Cpu;
+        let vb = candle_nn::VarBuilder::from_varmap(&candle_nn::VarMap::new(),
+            DType::F32,
+            &device,
+            candle_nn::Init::Normal { mean: 0.0, std: 0.02 },
+        );
+        
+        // Create a small network for testing
+        let net = crate::flow::network::SimpleMLPAdaLN::new(
+            16, 32, 16, 32, 2, vb
+        ).unwrap();
+        
+        // Condition: [batch=2, z_channels=32]
+        let z = Tensor::randn(0.0, 1.0, (2, 32), &device).unwrap();
+        
+        // Sample with 5 samples, 16 channels, 10 steps
+        let samples = flow_sample(&net, &z, 5, 16, 10).unwrap();
+        
+        assert_eq!(samples.dims(), (5, 2, 16));
+    }
+    
+    #[test]
+    fn test_denormalize() {
+        let device = Device::Cpu;
+        
+        let predictions = Tensor::from_vec(
+            vec![0.5, -0.3, 1.2, 0.8],
+            (2, 2),
+            &device,
+        ).unwrap();
+        
+        let stdev = Tensor::from_vec(vec![2.0, 1.5], (2,)).unwrap();
+        let means = Tensor::from_vec(vec![100.0, 200.0], (2,)).unwrap();
+        
+        // Reshape for broadcasting
+        let stdev_reshaped = stdev.unsqueeze(0)?;
+        let means_reshaped = means.unsqueeze(0)?;
+        
+        let denorm = denormalize_predictions(&predictions, &stdev_reshaped, &means_reshaped).unwrap();
+        let result: Vec<f32> = denorm.to_vec2().unwrap();
+        
+        // Check first element: 0.5 * 2.0 + 100.0 = 101.0
+        assert!((result[0][0] - 101.0).abs() < 1e-5);
+    }
+}

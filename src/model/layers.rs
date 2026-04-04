@@ -1,0 +1,132 @@
+//! Custom layers for Sundial model
+//!
+//! This file contains legacy layer implementations.
+//! Most layers have been moved to their own modules.
+
+use candle_core::{Result, Tensor};
+use candle_nn::{LayerNorm, Linear, Module};
+
+/// Positional encoding for time series
+pub struct PositionalEncoding {
+    max_seq_len: usize,
+    d_model: usize,
+}
+
+impl PositionalEncoding {
+    pub fn new(max_seq_len: usize, d_model: usize) -> Self {
+        Self {
+            max_seq_len,
+            d_model,
+        }
+    }
+
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let dims = x.dims();
+        let _batch_size = dims[0];
+        let seq_len = dims[1];
+
+        // Create positional encoding matrix
+        let mut pe = vec![vec![0.0f32; self.d_model]; seq_len];
+
+        for pos in 0..seq_len {
+            for i in (0..self.d_model).step_by(2) {
+                pe[pos][i] =
+                    (pos as f32 / 10000.0_f32.powf((2 * i) as f32 / self.d_model as f32)).sin();
+                if i + 1 < self.d_model {
+                    pe[pos][i + 1] =
+                        (pos as f32 / 10000.0_f32.powf((2 * i) as f32 / self.d_model as f32)).cos();
+                }
+            }
+        }
+
+        let pe_tensor = Tensor::from_vec(
+            pe.into_iter().flatten().collect(),
+            (seq_len, self.d_model),
+            x.device(),
+        )?;
+
+        x.broadcast_add(&pe_tensor.narrow(0, 0, seq_len)?)
+    }
+}
+
+/// Feed-forward network
+pub struct FeedForward {
+    linear1: Linear,
+    linear2: Linear,
+    dropout: f64,
+}
+
+impl FeedForward {
+    pub fn new(
+        d_model: usize,
+        d_ff: usize,
+        dropout: f64,
+        vb: candle_nn::VarBuilder,
+    ) -> Result<Self> {
+        // Initialize with proper Xavier initialization
+        let linear1 = Linear::new(
+            vb.get((d_ff, d_model), "linear1.weight")?,
+            Some(vb.get(d_ff, "linear1.bias")?),
+        );
+
+        let linear2 = Linear::new(
+            vb.get((d_model, d_ff), "linear2.weight")?,
+            Some(vb.get(d_model, "linear2.bias")?),
+        );
+
+        Ok(Self {
+            linear1,
+            linear2,
+            dropout,
+        })
+    }
+
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x = self.linear1.forward(x)?.relu()?;
+        self.linear2.forward(&x)
+    }
+}
+
+/// Layer normalization with residual connection
+pub struct ResidualBlock {
+    norm: LayerNorm,
+    dropout: f64,
+}
+
+impl ResidualBlock {
+    pub fn new(d_model: usize, dropout: f64, vb: candle_nn::VarBuilder) -> Result<Self> {
+        Ok(Self {
+            norm: candle_nn::layer_norm(d_model, 1e-5, vb)?,
+            dropout,
+        })
+    }
+
+    pub fn forward<F>(&self, x: &Tensor, f: F) -> Result<Tensor>
+    where
+        F: Fn(&Tensor) -> Result<Tensor>,
+    {
+        let normalized = self.norm.forward(x)?;
+        let transformed = f(&normalized)?;
+
+        // Residual connection
+        x.broadcast_add(&transformed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::{DType, Device};
+
+    #[test]
+    fn test_positional_encoding() {
+        let device = Device::Cpu;
+        let pe = PositionalEncoding::new(1000, 128);
+
+        let x = Tensor::ones((2, 100, 128), DType::F32, &device).unwrap();
+        let output = pe.forward(&x);
+
+        assert!(output.is_ok());
+        assert_eq!(output.unwrap().dims(), &[2, 100, 128]);
+    }
+}

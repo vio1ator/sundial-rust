@@ -1,0 +1,240 @@
+//! Main Sundial model for time series forecasting
+//! 
+//! Integrates the transformer backbone with flow matching for probabilistic forecasting.
+//! Matches the SundialForPrediction from the Python implementation.
+
+use candle_core::{Tensor, Result, DType};
+use candle_nn::Module;
+use crate::model::config::SundialConfig;
+use crate::model::transformer::SundialTransformer;
+use crate::flow::network::SimpleMLPAdaLN;
+use crate::flow::sampling::flow_sample;
+
+/// Sundial model for prediction
+pub struct SundialModel {
+    config: SundialConfig,
+    model: SundialTransformer,
+    flow_loss: SimpleMLPAdaLN,
+}
+
+impl SundialModel {
+    /// Create a new Sundial model
+    pub fn new(config: &SundialConfig, vb: candle_nn::VarBuilder) -> Result<Self> {
+        let model = SundialTransformer::new(config, vb.pp("model"))?;
+        
+        // Flow loss network
+        let flow_loss = SimpleMLPAdaLN::new(
+            config.output_token_lens[0],
+            config.hidden_size,
+            config.output_token_lens[0],
+            config.hidden_size,
+            config.flow_loss_depth,
+            vb.pp("flow_loss"),
+        )?;
+        
+        Ok(Self {
+            config: config.clone(),
+            model,
+            flow_loss,
+        })
+    }
+    
+    /// Apply Reversible Instance Normalization (RevIN)
+    /// 
+    /// # Arguments
+    /// * `x` - Input tensor of shape [batch, seq_len]
+    /// 
+    /// # Returns
+    /// Normalized tensor, mean, and std
+    pub fn revin_normalize(x: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
+        let (batch, seq_len) = x.dims2()?;
+        
+        // Calculate mean: [batch]
+        let means = x.mean_keepdim(1)?;
+        
+        // Calculate std: [batch]
+        let stdev = ((x.powf(2.0)?).mean_keepdim(1)? - means.powf(2.0)?)?
+            .sqrt()?
+            .clamp(1e-2, f32::INFINITY)?;
+        
+        // Normalize: (x - mean) / std
+        let normalized = x.sub(&means)?.div(&stdev)?;
+        
+        Ok((normalized, means, stdev))
+    }
+    
+    /// Denormalize predictions using RevIN
+    pub fn revin_denormalize(
+        predictions: &Tensor,
+        stdev: &Tensor,
+        means: &Tensor,
+    ) -> Result<Tensor> {
+        predictions.mul(stdev)?.add(means)
+    }
+    
+    /// Generate forecasts
+    /// 
+    /// # Arguments
+    /// * `input_ids` - Input time series of shape [batch_size, seq_len]
+    /// * `max_new_tokens` - Number of future timesteps to forecast
+    /// * `num_samples` - Number of probabilistic samples to generate
+    /// * `revin` - Whether to apply RevIN normalization
+    /// 
+    /// # Returns
+    /// Forecasts of shape [num_samples, batch_size, forecast_length]
+    pub fn generate(
+        &self,
+        input_ids: &Tensor,
+        max_new_tokens: usize,
+        num_samples: usize,
+        revin: bool,
+    ) -> Result<Tensor> {
+        let (batch_size, seq_len) = input_ids.dims2()?;
+        
+        // Apply RevIN if requested
+        let (input_ids, means, stdev) = if revin {
+            let (normalized, means, stdev) = Self::revin_normalize(input_ids)?;
+            (normalized, Some(means), Some(stdev))
+        } else {
+            (input_ids.clone(), None, None)
+        };
+        
+        // Encode input through transformer
+        let hidden_states = self.model.forward(&input_ids)?;
+        
+        // Get the last hidden state for conditioning
+        let (_, num_patches, hidden_size) = hidden_states.dims3()?;
+        let last_hidden = hidden_states.narrow(1, num_patches - 1, 1)?;
+        let last_hidden = last_hidden.reshape((batch_size, hidden_size))?;
+        
+        // Generate samples using flow matching
+        let predictions = flow_sample(
+            &self.flow_loss,
+            &last_hidden,
+            num_samples,
+            self.config.output_token_lens[0],
+            self.config.num_sampling_steps,
+        )?;
+        
+        // Truncate to max_new_tokens if needed
+        let forecast_length = self.config.output_token_lens[0];
+        let predictions = if max_new_tokens < forecast_length {
+            predictions.narrow(2, 0, max_new_tokens)?
+        } else {
+            predictions
+        };
+        
+        // Denormalize if RevIN was applied
+        if revin {
+            let stdev = stdev.unwrap();
+            let means = means.unwrap();
+            // Reshape for broadcasting: [1, batch, 1]
+            let stdev_exp = stdev.unsqueeze(0)?.unsqueeze(2)?;
+            let means_exp = means.unsqueeze(0)?.unsqueeze(2)?;
+            Self::revin_denormalize(&predictions, &stdev_exp, &means_exp)
+        } else {
+            Ok(predictions)
+        }
+    }
+    
+    /// Get model configuration
+    pub fn config(&self) -> &SundialConfig {
+        &self.config
+    }
+    
+    /// Get the transformer backbone
+    pub fn transformer(&self) -> &SundialTransformer {
+        &self.model
+    }
+}
+
+impl Module for SundialModel {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        // Simple forward for encoding only
+        self.model.forward(x)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::{Device, DType};
+    
+    #[test]
+    fn test_sundial_model_creation() {
+        let config = SundialConfig {
+            input_token_len: 16,
+            hidden_size: 64,
+            intermediate_size: 128,
+            num_hidden_layers: 2,
+            num_attention_heads: 4,
+            output_token_lens: vec![32],
+            flow_loss_depth: 2,
+            ..Default::default()
+        };
+        
+        let device = Device::Cpu;
+        let vb = candle_nn::VarBuilder::from_varmap(&candle_nn::VarMap::new(),
+            DType::F32,
+            &device,
+            candle_nn::Init::Normal { mean: 0.0, std: 0.02 },
+        );
+        
+        let model = SundialModel::new(&config, vb);
+        assert!(model.is_ok());
+    }
+    
+    #[test]
+    fn test_revinnormalize() {
+        let device = Device::Cpu;
+        let x = Tensor::from_vec(
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            (2, 3),
+            &device,
+        ).unwrap();
+        
+        let (normalized, means, stdev) = SundialModel::revin_normalize(&x).unwrap();
+        
+        // Check means: [2.0, 5.0]
+        let means_vec: Vec<f32> = means.to_vec1().unwrap();
+        assert!((means_vec[0] - 2.0).abs() < 1e-5);
+        assert!((means_vec[1] - 5.0).abs() < 1e-5);
+        
+        // Check normalized has mean ~0
+        let norm_mean = normalized.mean_keepdim(1).unwrap();
+        let norm_mean_vec: Vec<f32> = norm_mean.to_vec1().unwrap();
+        assert!(norm_mean_vec[0].abs() < 1e-5);
+        assert!(norm_mean_vec[1].abs() < 1e-5);
+    }
+    
+    #[test]
+    fn test_generate_shape() {
+        let config = SundialConfig {
+            input_token_len: 16,
+            hidden_size: 64,
+            intermediate_size: 128,
+            num_hidden_layers: 2,
+            num_attention_heads: 4,
+            output_token_lens: vec![32],
+            flow_loss_depth: 2,
+            num_sampling_steps: 5,
+            ..Default::default()
+        };
+        
+        let device = Device::Cpu;
+        let vb = candle_nn::VarBuilder::from_varmap(&candle_nn::VarMap::new(),
+            DType::F32,
+            &device,
+            candle_nn::Init::Normal { mean: 0.0, std: 0.02 },
+        );
+        let model = SundialModel::new(&config, vb).unwrap();
+        
+        // Input: [batch=2, seq_len=64] (4 patches)
+        let input = Tensor::randn(0.0, 1.0, (2, 64), &device).unwrap();
+        
+        // Generate 3 samples of 32 timesteps
+        let output = model.generate(&input, 32, 3, false).unwrap();
+        
+        assert_eq!(output.dims(), (3, 2, 32));
+    }
+}

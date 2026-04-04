@@ -1,0 +1,27 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Model weights (large files - download separately)
+/weights/*.safetensors
+/weights/*.bin
+
+# Debug
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ralphi
+.ralphi/*
+!.ralphi/config.yaml
+/weights/*
+!/weights/config.json

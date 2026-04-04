@@ -1,0 +1,182 @@
+//! Sundial model configuration
+//!
+//! Matches the HuggingFace configuration for thuml/sundial-base-128m
+
+use serde::{Deserialize, Serialize};
+
+/// Sundial model configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SundialConfig {
+    /// Length of each input token/patch
+    #[serde(default = "default_input_token_len")]
+    pub input_token_len: usize,
+
+    /// Hidden dimension size
+    #[serde(default = "default_hidden_size")]
+    pub hidden_size: usize,
+
+    /// Intermediate dimension in MLP
+    #[serde(default = "default_intermediate_size")]
+    pub intermediate_size: usize,
+
+    /// Number of output token lengths supported
+    #[serde(default = "default_output_token_lens")]
+    pub output_token_lens: Vec<usize>,
+
+    /// Number of transformer layers
+    #[serde(default = "default_num_hidden_layers")]
+    pub num_hidden_layers: usize,
+
+    /// Number of attention heads
+    #[serde(default = "default_num_attention_heads")]
+    pub num_attention_heads: usize,
+
+    /// Activation function: "silu", "relu", etc.
+    #[serde(default = "default_hidden_act")]
+    pub hidden_act: String,
+
+    /// Whether to use cache for KV
+    #[serde(default = "default_use_cache")]
+    pub use_cache: bool,
+
+    /// RoPE theta parameter
+    #[serde(default = "default_rope_theta")]
+    pub rope_theta: f64,
+
+    /// Dropout rate
+    #[serde(default = "default_dropout_rate")]
+    pub dropout_rate: f64,
+
+    /// Initializer range for weights
+    #[serde(default = "default_initializer_range")]
+    pub initializer_range: f64,
+
+    /// Maximum position embeddings
+    #[serde(default = "default_max_position_embeddings")]
+    pub max_position_embeddings: usize,
+
+    /// Flow loss depth (number of residual blocks)
+    #[serde(default = "default_flow_loss_depth")]
+    pub flow_loss_depth: usize,
+
+    /// Number of sampling steps for flow matching
+    #[serde(default = "default_num_sampling_steps")]
+    pub num_sampling_steps: usize,
+
+    /// Diffusion batch multiplier
+    #[serde(default = "default_diffusion_batch_mul")]
+    pub diffusion_batch_mul: usize,
+
+    /// Enable debug mode for intermediate tensor outputs
+    #[serde(default)]
+    pub debug_mode: bool,
+
+    /// Stop after this layer for debugging (None = all layers)
+    #[serde(default)]
+    pub debug_layer: Option<usize>,
+}
+
+fn default_input_token_len() -> usize {
+    16
+}
+fn default_hidden_size() -> usize {
+    768
+}
+fn default_intermediate_size() -> usize {
+    3072
+}
+fn default_output_token_lens() -> Vec<usize> {
+    vec![720]
+}
+fn default_num_hidden_layers() -> usize {
+    12
+}
+fn default_num_attention_heads() -> usize {
+    12
+}
+fn default_hidden_act() -> String {
+    "silu".to_string()
+}
+fn default_use_cache() -> bool {
+    true
+}
+fn default_rope_theta() -> f64 {
+    10000.0
+}
+fn default_dropout_rate() -> f64 {
+    0.1
+}
+fn default_initializer_range() -> f64 {
+    0.02
+}
+fn default_max_position_embeddings() -> usize {
+    10000
+}
+fn default_flow_loss_depth() -> usize {
+    3
+}
+fn default_num_sampling_steps() -> usize {
+    50
+}
+fn default_diffusion_batch_mul() -> usize {
+    4
+}
+
+impl Default for SundialConfig {
+    fn default() -> Self {
+        Self {
+            input_token_len: default_input_token_len(),
+            hidden_size: default_hidden_size(),
+            intermediate_size: default_intermediate_size(),
+            output_token_lens: default_output_token_lens(),
+            num_hidden_layers: default_num_hidden_layers(),
+            num_attention_heads: default_num_attention_heads(),
+            hidden_act: default_hidden_act(),
+            use_cache: default_use_cache(),
+            rope_theta: default_rope_theta(),
+            dropout_rate: default_dropout_rate(),
+            initializer_range: default_initializer_range(),
+            max_position_embeddings: default_max_position_embeddings(),
+            flow_loss_depth: default_flow_loss_depth(),
+            num_sampling_steps: default_num_sampling_steps(),
+            diffusion_batch_mul: default_diffusion_batch_mul(),
+            debug_mode: false,
+            debug_layer: None,
+        }
+    }
+}
+
+impl SundialConfig {
+    /// Create a new config with the standard sundial-base-128m settings
+    pub fn sundial_base_128m() -> Self {
+        Self::default()
+    }
+
+    /// Get the head dimension (hidden_size / num_attention_heads)
+    pub fn head_dim(&self) -> usize {
+        self.hidden_size / self.num_attention_heads
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = SundialConfig::default();
+        assert_eq!(config.input_token_len, 16);
+        assert_eq!(config.hidden_size, 768);
+        assert_eq!(config.num_hidden_layers, 12);
+        assert_eq!(config.num_attention_heads, 12);
+        assert_eq!(config.head_dim(), 64);
+    }
+
+    #[test]
+    fn test_config_serialization() {
+        let config = SundialConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: SundialConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.hidden_size, config.hidden_size);
+    }
+}

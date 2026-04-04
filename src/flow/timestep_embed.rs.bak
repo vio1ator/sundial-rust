@@ -1,0 +1,131 @@
+//! Timestep embedding for flow matching
+//! 
+//! Creates sinusoidal embeddings of timesteps for the flow network.
+//! Matches the TimestepEmbedder from the Python implementation.
+
+use candle_core::{Tensor, Result, DType};
+use candle_nn::{Linear, Module};
+
+/// Timestep embedding network
+pub struct TimestepEmbedder {
+    mlp: (Linear, Linear), // Two linear layers with SiLU in between
+    frequency_embedding_size: usize,
+}
+
+impl TimestepEmbedder {
+    /// Create a new timestep embedder
+    pub fn new(hidden_size: usize, frequency_embedding_size: usize, vb: candle_nn::VarBuilder) -> Result<Self> {
+        let freq_size = frequency_embedding_size;
+        
+        // First linear: freq_size -> hidden_size
+        let w1 = vb.get((hidden_size, freq_size), "mlp.0.weight")?;
+        let b1 = vb.get(hidden_size, "mlp.0.bias")?;
+        let linear1 = Linear::new(w1, Some(b1));
+        
+        // Second linear: hidden_size -> hidden_size
+        let w2 = vb.get((hidden_size, hidden_size), "mlp.2.weight")?;
+        let b2 = vb.get(hidden_size, "mlp.2.bias")?;
+        let linear2 = Linear::new(w2, Some(b2));
+        
+        Ok(Self {
+            mlp: (linear1, linear2),
+            frequency_embedding_size: freq_size,
+        })
+    }
+    
+    /// Create sinusoidal timestep embeddings
+    /// 
+    /// # Arguments
+    /// * `t` - Timestep tensor of shape [batch_size]
+    /// * `dim` - Output dimension
+    /// * `max_period` - Controls minimum frequency
+    pub fn timestep_embedding(t: &Tensor, dim: usize, max_period: f64) -> Result<Tensor> {
+        let device = t.device();
+        let batch_size = t.dim(0)?;
+        
+        // Create frequency array: exp(-log(max_period) * i / (dim/2)) for i in 0..dim/2
+        let half = dim / 2;
+        let mut freqs = Vec::with_capacity(half);
+        for i in 0..half {
+            let freq = (-max_period.ln() * (i as f64) / (half as f64)).exp();
+            freqs.push(freq as f32);
+        }
+        let freqs = Tensor::from_vec(freqs, (half,), device)?;
+        
+        // Compute args: t[:, None] * freqs[None]
+        let t_expanded = t.reshape((batch_size, 1))?.to_dtype(DType::F32)?;
+        let args = t_expanded.broadcast_mul(&freqs.unsqueeze(0)?)?;
+        
+        // Concatenate cos and sin
+        let cos = args.cos()?;
+        let sin = args.sin()?;
+        let embedding = Tensor::cat(&[&cos, &sin], 1)?;
+        
+        // If dim is odd, add zeros
+        if dim % 2 == 1 {
+            let zeros = Tensor::zeros((batch_size, 1), DType::F32, device)?;
+            Tensor::cat(&[&embedding, &zeros], 1)
+        } else {
+            Ok(embedding)
+        }
+    }
+}
+
+impl Module for TimestepEmbedder {
+    fn forward(&self, t: &Tensor) -> Result<Tensor> {
+        // Create frequency embedding
+        let t_freq = Self::timestep_embedding(t, self.frequency_embedding_size, 10000.0)?;
+        
+        // Apply MLP
+        let t_emb = self.mlp.0.forward(&t_freq)?;
+        let t_emb = t_emb.silu()?;
+        self.mlp.1.forward(&t_emb)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::{Device, DType};
+    
+    #[test]
+    fn test_timestep_embedding_creation() {
+        let device = Device::Cpu;
+        let vb = candle_nn::VarBuilder::from_varmap(&candle_nn::VarMap::new(),
+            DType::F32,
+            &device,
+            candle_nn::Init::Normal { mean: 0.0, std: 0.02 },
+        );
+        
+        let embedder = TimestepEmbedder::new(768, 256, vb);
+        assert!(embedder.is_ok());
+    }
+    
+    #[test]
+    fn test_timestep_embedding_forward() {
+        let device = Device::Cpu;
+        let vb = candle_nn::VarBuilder::from_varmap(&candle_nn::VarMap::new(),
+            DType::F32,
+            &device,
+            candle_nn::Init::Normal { mean: 0.0, std: 0.02 },
+        );
+        let embedder = TimestepEmbedder::new(64, 32, vb).unwrap();
+        
+        // Input: [batch=4]
+        let t = Tensor::from_vec(vec![0.0, 0.25, 0.5, 1.0], (4,), &device).unwrap();
+        let output = embedder.forward(&t).unwrap();
+        
+        assert_eq!(output.dims(), (4, 64));
+    }
+    
+    #[test]
+    fn test_sinusoidal_embedding() {
+        let device = Device::Cpu;
+        let t = Tensor::from_vec(vec![0.0, 1.0], (2,), &device).unwrap();
+        
+        let embedding = TimestepEmbedder::timestep_embedding(&t, 8, 10000.0).unwrap();
+        let dims = embedding.dims();
+        
+        assert_eq!(dims, (2, 8));
+    }
+}
