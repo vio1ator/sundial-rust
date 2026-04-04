@@ -667,10 +667,18 @@ async fn run_inference(args: &Args, timestamp_col: &str, value_col: &str) -> Res
         // Verbose mode: show additional details
         if args.verbose {
             println!("\n🔍 Detailed Information:");
-            println!(
-                "  Model: {:?}",
-                args.model.as_ref().unwrap().file_name().unwrap_or_default()
-            );
+            // Handle both embedded weights and custom model path
+            let model_name = args
+                .model
+                .as_ref()
+                .map(|p| {
+                    p.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string()
+                })
+                .unwrap_or_else(|| "embedded weights".to_string());
+            println!("  Model: {}", model_name);
             println!("  Input data points: {}", values.len());
             println!("  Input window used: {:?}", input_window.len());
 
@@ -683,7 +691,7 @@ async fn run_inference(args: &Args, timestamp_col: &str, value_col: &str) -> Res
 
             // Show prediction distribution
             let mut sorted_preds = means.clone();
-            sorted_preds.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            sorted_preds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let median = sorted_preds[sorted_preds.len() / 2];
             println!("  Median forecast: {:.4}", median);
 
