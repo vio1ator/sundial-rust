@@ -475,27 +475,28 @@ fn test_full_build_verification() {
         "Build output directory should exist"
     );
 
-    // Verify that build artifacts exist (check for any .rlib, .dylib, or .dll)
-    let lib_extensions = if cfg!(windows) {
-        vec!["dll"]
-    } else if cfg!(target_os = "macos") {
-        vec!["dylib", "rlib"]
+    // Verify that the compiled binary executable exists
+    // This project builds as a CLI application (binary), not a library
+    // Binary name is "main" comes from src/bin/main.rs (default for bin crates)
+    let binary_name = "main";
+    let binary_extensions = if cfg!(windows) {
+        vec![".exe"]
     } else {
-        vec!["rlib"]
+        vec![""]  // No extension on Unix-like systems
     };
 
-    let mut lib_found = false;
-    for ext in &lib_extensions {
-        let lib_path = debug_dir.join(format!("libsundial_rust.{}", ext));
-        if lib_path.exists() {
-            lib_found = true;
+    let mut binary_found = false;
+    for ext in &binary_extensions {
+        let binary_path = debug_dir.join(format!("{}{}", binary_name, ext));
+        if binary_path.exists() {
+            binary_found = true;
             break;
         }
     }
 
     assert!(
-        lib_found,
-        "Compiled library should exist in target directory with one of: {:?}",
-        lib_extensions
+        binary_found,
+        "Compiled binary executable should exist in target/debug/ with one of the following extensions: {:?}",
+        binary_extensions
     );
 }
