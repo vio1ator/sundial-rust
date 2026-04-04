@@ -30,3 +30,7 @@ Thumbs.db
 !.ralphi/config.yaml
 /weights/*
 !/weights/config.json
+/weights/config.json
+
+# Test cache (large model files)
+/test_cache/
