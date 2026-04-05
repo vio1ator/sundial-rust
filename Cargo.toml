@@ -95,6 +95,7 @@ libc = "0.2"
 [features]
 default = ["std"]
 std = []
+bench = []
 # Platform-specific features
 linux = []
 macos = []
@@ -106,8 +107,13 @@ aarch64 = []
 candle-cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3.10"
+
+[[bench]]
+name = "memory_vs_disk"
+harness = false
+required-features = ["bench"]
 
 [profile.release]
 opt-level = 3

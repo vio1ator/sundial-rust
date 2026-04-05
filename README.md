@@ -26,6 +26,75 @@
 | Input Token Length | 16 |
 | Activation | SiLU |
 
+## 📦 Model Loading
+
+Sundial Rust supports multiple model loading strategies with a memory-first default approach for optimal startup performance.
+
+### Memory-First Loading (Default)
+
+By default, Sundial loads model weights directly into memory without writing to disk:
+
+- **Zero disk I/O**: Weights are decompressed from embedded assets into memory
+- **Fast startup**: Eliminates filesystem overhead during model initialization
+- **Integrity verification**: SHA256 hash verification ensures weight integrity
+- **~490MB memory usage**: For the sundial-base-128m model
+
+This is the recommended approach for most use cases.
+
+### Environment Variables
+
+Configure model loading via environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `SUNDIAL_MODEL_PATH` | Path to external `model.safetensors` file |
+| `SUNDIAL_CONFIG_PATH` | Path to external `config.json` file |
+| `SUNDIAL_TEMP_DIR` | Custom directory for extracted weights (only with `SUNDIAL_USE_DISK=true`) |
+| `SUNDIAL_USE_DISK` | Set to `"true"` to extract weights to disk instead of memory |
+
+### Loading Strategies
+
+**1. Memory Loading (Default)**
+```rust
+use sundial_rust::weights::loader::WeightLoader;
+use sundial_rust::model::loader::load_sundial_from_memory;
+use candle_core::Device;
+
+let loader = WeightLoader::new()?; // Loads embedded weights into memory
+let weights = loader.get_model_weights().expect("Memory weights available");
+let config = load_config_from_env()?;
+let device = Device::Cpu;
+let model = load_sundial_from_memory(weights, &config, &device)?;
+```
+
+**2. External Weights**
+```bash
+export SUNDIAL_MODEL_PATH=/path/to/model.safetensors
+export SUNDIAL_CONFIG_PATH=/path/to/config.json
+```
+
+**3. Disk Extraction**
+```bash
+export SUNDIAL_USE_DISK=true
+```
+
+### Programmatic API
+
+```rust
+use sundial_rust::weights::loader::{WeightLoader, verify_integrity, extract};
+use std::path::Path;
+
+// Load from memory (default)
+let loader = WeightLoader::new()?;
+let model_path = loader.model_path(); // Returns "<memory>" for in-memory weights
+
+// Verify integrity of a weights file
+verify_integrity(Path::new("weights/model.safetensors"))?;
+
+// Extract embedded weights to disk
+extract(WEIGHTS_COMPRESSED, Path::new("/tmp/model.safetensors"))?;
+```
+
 ## 🚀 Quick Start
 
 ### Prerequisites
