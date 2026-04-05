@@ -194,15 +194,16 @@ impl SundialModel {
         SundialModel::new(&config, vb)
     }
 
-    /// Load model from safetensors file
+    /// Load Sundial model from safetensors weights.
     ///
-    /// Automatically resolves the model path using WeightLoader, which checks:
-    /// 1. SUNDIAL_MODEL_PATH environment variable for external weights
-    /// 2. Extracts embedded compressed weights to temporary storage
+    /// This function supports multiple loading modes:
+    /// 1. External weights via SUNDIAL_MODEL_PATH and SUNDIAL_CONFIG_PATH environment variables
+    /// 2. Embedded weights loaded into memory (default - no disk I/O)
+    /// 3. Embedded weights extracted to disk (when SUNDIAL_USE_DISK=true)
     ///
     /// # Arguments
     /// * `config` - Model configuration
-    /// * `path` - Path to model weights (can be override with SUNDIAL_MODEL_PATH env var)
+    /// * `path` - Path to model weights (used for external weights or direct loading)
     /// * `device` - Device to load model on
     ///
     /// # Returns
@@ -213,14 +214,14 @@ impl SundialModel {
         path: P,
         device: &Device,
     ) -> candle_core::Result<Self> {
-        use crate::model::loader::{create_varbuilder, load_safetensors};
+        use crate::assets::CONFIG_JSON;
+        use crate::model::loader::{create_varbuilder, load_safetensors, load_sundial_from_memory};
         use crate::weights::WeightLoader;
-        use std::env;
 
         let path_ref = path.as_ref();
 
         // Check if SUNDIAL_MODEL_PATH environment variable is set
-        let final_path = if let Ok(external_path) = env::var("SUNDIAL_MODEL_PATH") {
+        let final_path = if let Ok(external_path) = std::env::var("SUNDIAL_MODEL_PATH") {
             tracing::info!(
                 "Using external weights from SUNDIAL_MODEL_PATH: {:?}",
                 external_path
@@ -231,17 +232,28 @@ impl SundialModel {
             tracing::info!("Using provided model path: {:?}", path_ref);
             path_ref.to_path_buf()
         } else {
-            // Fall back to WeightLoader for embedded weights
+            // Fall back to WeightLoader for embedded weights (memory-first by default)
             tracing::info!(
                 "Model path {:?} not found, using embedded weights via WeightLoader",
                 path_ref
             );
-            WeightLoader::new()
+            let loader = WeightLoader::new()
                 .map_err(|e| {
                     candle_core::Error::Msg(format!("Failed to create weight loader: {}", e))
-                })?
-                .model_path()
-                .to_path_buf()
+                })?;
+
+            // Use memory loading if available
+            if let Some(weights) = loader.get_model_weights() {
+                tracing::info!("Loading embedded weights from memory");
+                // Use embedded config for memory mode
+                let config: SundialConfig = serde_json::from_slice(CONFIG_JSON)
+                    .map_err(|e| candle_core::Error::Msg(format!("Failed to parse embedded config: {}", e)))?;
+                return load_sundial_from_memory(weights, &config, device)
+                    .map_err(|e| candle_core::Error::Msg(format!("Failed to load model from memory: {}", e)));
+            }
+
+            // Fallback to disk-based loading (SUNDIAL_USE_DISK=true mode)
+            loader.model_path().to_path_buf()
         };
 
         tracing::info!("Loading weights from {:?}", final_path);

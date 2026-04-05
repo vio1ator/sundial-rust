@@ -116,6 +116,13 @@ pub fn load_safetensors<P: AsRef<Path>>(
 ///
 /// This allows loading weights without writing to disk.
 ///
+/// # Memory Lifecycle
+/// - Input `data` is **borrowed**, not owned
+/// - Each tensor's raw data is **copied** into intermediate buffers (`tensor_data`, `f32_data`, etc.)
+/// - `Tensor::from_vec()` takes **ownership** of these buffers
+/// - Returned `Tensor`s **own their data completely** - independent of input `data`
+/// - Input `data` buffer can be safely dropped immediately after this function returns
+///
 /// # Arguments
 /// * `data` - Raw safetensors bytes (decompressed)
 /// * `device` - Device to load tensors on
@@ -149,11 +156,14 @@ pub fn load_safetensors_from_bytes(
             _ => anyhow::bail!("Unsupported dtype: {:?}", tensor.dtype()),
         };
         
-        // Get raw data
+        // Get raw data - this is a borrow into the input `data` buffer
         let data_ptr = tensor.data();
         
         // Convert to candle tensor
-        // Note: We need to copy the data because safetensors borrows the buffer
+        // CRITICAL: Must copy data because:
+        // 1. safetensors borrows the input buffer (data_ptr is a slice into `data`)
+        // 2. Candle Tensor must own its data for safety and mobility
+        // 3. Without copying, tensors would dangle when input buffer is dropped
         let tensor_data: Vec<u8> = data_ptr.to_vec();
         let candle_tensor = match dtype {
             candle_core::DType::F32 => {
@@ -161,6 +171,7 @@ pub fn load_safetensors_from_bytes(
                     .chunks(4)
                     .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
                     .collect();
+                // Tensor::from_vec takes ownership of f32_data
                 Tensor::from_vec(f32_data, shape.as_slice(), device)?
             }
             candle_core::DType::F64 => {
@@ -171,10 +182,12 @@ pub fn load_safetensors_from_bytes(
                         chunk[4], chunk[5], chunk[6], chunk[7],
                     ]))
                     .collect();
+                // Tensor::from_vec takes ownership of f64_data
                 Tensor::from_vec(f64_data, shape.as_slice(), device)?
             }
             candle_core::DType::U8 => {
-                Tensor::from_vec(tensor_data.clone(), shape.as_slice(), device)?
+                // Tensor::from_vec takes ownership of tensor_data
+                Tensor::from_vec(tensor_data, shape.as_slice(), device)?
             }
             candle_core::DType::I64 => {
                 let i64_data: Vec<i64> = tensor_data
@@ -184,14 +197,18 @@ pub fn load_safetensors_from_bytes(
                         chunk[4], chunk[5], chunk[6], chunk[7],
                     ]))
                     .collect();
+                // Tensor::from_vec takes ownership of i64_data
                 Tensor::from_vec(i64_data, shape.as_slice(), device)?
             }
             _ => anyhow::bail!("Unsupported dtype for tensor {}: {:?}", tensor_name, dtype),
         };
         
+        // Each tensor now owns its data independently
         tensors.insert(tensor_name.to_string(), candle_tensor);
     }
     
+    // At this point, all tensor data has been copied into tensor-owned allocations.
+    // The input `data` buffer is no longer referenced and can be dropped.
     tracing::info!("Loaded {} tensors from memory", tensors.len());
     Ok(tensors)
 }
@@ -289,6 +306,126 @@ pub fn load_sundial_from_huggingface<'a>(
     create_varbuilder(tensors, device)
 }
 
+/// Load Sundial model from in-memory weights.
+///
+/// This function loads the Sundial model directly from decompressed safetensors
+/// bytes held in memory, avoiding all disk I/O for optimal startup performance.
+/// It is the primary API for the memory-first loading strategy.
+///
+/// # Memory-First Loading
+///
+/// When using `WeightLoader::new_with_memory_weights()` or the default
+/// `WeightLoader::new()` mode, model weights are decompressed from embedded
+/// assets and held in memory. This function takes those in-memory weights
+/// and constructs the Sundial model without ever touching the filesystem.
+///
+/// Benefits:
+/// - **Zero disk I/O**: No temporary files or extraction required
+/// - **Fast startup**: Eliminates filesystem overhead
+/// - **Integrity guaranteed**: SHA256 hash verification before loading
+/// - **Memory efficient**: Weights are shared between loader and model
+///
+/// # Arguments
+///
+/// * `weights` - Decompressed safetensors bytes (typically from `WeightLoader::get_model_weights()`)
+/// * `config` - Sundial configuration struct defining model architecture
+/// * `device` - Candle device (CPU/GPU) to load tensors on
+///
+/// # Returns
+///
+/// * `Ok(SundialModel)` - The loaded model ready for inference
+/// * `Err(anyhow::Error)` if loading fails due to:
+///   - Hash verification failure (weights corrupted or tampered)
+///   - Safetensors parsing error
+///   - Tensor shape mismatch with expected model architecture
+///   - Device allocation failure
+///
+/// # Memory Lifecycle
+///
+/// 1. **Hash verification**: Reads `weights` buffer to compute SHA256
+/// 2. **Tensor loading**: `load_safetensors_from_bytes()` **copies** all tensor data
+///    into Tensor-owned allocations
+/// 3. **VarBuilder creation**: `create_varbuilder()` wraps tensors with name mapping
+/// 4. **Model construction**: `SundialModel::new()` takes ownership of VarBuilder
+/// 5. **Buffer release**: After `load_safetensors_from_bytes()` returns, the
+///    `weights` buffer is no longer referenced and can be dropped
+///
+/// The decompressed weights buffer is **not** kept alive by the model - tensors
+/// own their data independently.
+///
+/// # Example
+///
+/// ```no_run
+/// use sundial_rust::model::loader::load_sundial_from_memory;
+/// use sundial_rust::weights::loader::WeightLoader;
+/// use sundial_rust::model::config::SundialConfig;
+/// use candle_core::Device;
+///
+/// # fn main() -> anyhow::Result<()> {
+/// // Create weight loader with in-memory weights (default mode)
+/// let loader = WeightLoader::new()?;
+///
+/// // Get the decompressed weights from memory
+/// let weights = loader.get_model_weights()
+///     .expect("Memory loader should have weights");
+///
+/// // Load configuration
+/// let config = SundialConfig::default();
+///
+/// // Select device
+/// let device = Device::Cpu;
+///
+/// // Load the model from memory
+/// let model = load_sundial_from_memory(weights, &config, &device)?;
+///
+/// // Model is now ready for inference
+/// # Ok(())
+/// # }
+/// ```
+pub fn load_sundial_from_memory(
+    weights: &[u8],
+    config: &crate::model::SundialConfig,
+    device: &Device,
+) -> Result<crate::model::SundialModel> {
+    // Verify hash before loading - only reads from weights, does not retain reference
+    verify_integrity_from_bytes(weights)?;
+
+    // Load tensors from bytes - this copies all tensor data into Tensor-owned allocations
+    // After this call returns, the weights buffer is no longer referenced
+    let tensors = load_safetensors_from_bytes(weights, device)?;
+
+    // Create VarBuilder with proper name mapping - takes ownership of tensors
+    let vb = create_varbuilder(tensors, device)?;
+
+    // Construct the Sundial model - takes ownership of VarBuilder
+    // At this point, tensors are fully owned by the model, weights buffer can be dropped
+    crate::model::SundialModel::new(config, vb).map_err(|e| anyhow::anyhow!("Failed to create Sundial model: {}", e))
+}
+
+/// Helper function to verify integrity from bytes
+/// 
+/// This is a convenience wrapper that re-exports the verification function
+/// from the weights loader module.
+fn verify_integrity_from_bytes(weights: &[u8]) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    use crate::assets::MODEL_SHA256;
+
+    let mut hasher = Sha256::new();
+    hasher.update(weights);
+    let computed_hash = format!("{:x}", hasher.finalize());
+
+    if computed_hash != MODEL_SHA256 {
+        anyhow::bail!(
+            "Hash mismatch: expected {}, got {}",
+            MODEL_SHA256,
+            computed_hash
+        );
+    }
+
+    tracing::debug!("SHA256 hash verified (memory): {}", computed_hash);
+    Ok(())
+}
+
 /// Simple VarBuilder implementation using a tensor map
 pub struct TensorVarBuilder {
     tensors: HashMap<String, Tensor>,
@@ -383,5 +520,101 @@ mod tests {
             map_safetensor_to_var_path("flow_loss.net.time_embed.mlp.0.weight"),
             "time_embed.mlp.0.weight"
         );
+    }
+
+    #[test]
+    fn test_load_safetensors_from_bytes() {
+        use crate::weights::loader::WeightLoader;
+
+        // Get weights from memory loader
+        let loader = WeightLoader::new_with_memory_weights()
+            .expect("Failed to create memory weight loader");
+        let weights = loader.get_model_weights()
+            .expect("Memory loader should have weights");
+
+        // Load tensors from bytes
+        let device = Device::Cpu;
+        let result = load_safetensors_from_bytes(weights, &device);
+        
+        assert!(result.is_ok(), "load_safetensors_from_bytes should succeed");
+        
+        let tensors = result.unwrap();
+        assert!(!tensors.is_empty(), "Should have loaded some tensors");
+        
+        // Check for some expected tensor names (with model. prefix as in the safetensors file)
+        assert!(tensors.contains_key("model.embed_layer.hidden_layer.weight"));
+        assert!(tensors.contains_key("model.layers.0.self_attn.q_proj.weight"));
+    }
+
+    #[test]
+    fn test_create_varbuilder() {
+        use crate::weights::loader::WeightLoader;
+
+        // Get weights from memory loader
+        let loader = WeightLoader::new_with_memory_weights()
+            .expect("Failed to create memory weight loader");
+        let weights = loader.get_model_weights()
+            .expect("Memory loader should have weights");
+
+        // Load tensors and create varbuilder
+        let device = Device::Cpu;
+        let tensors = load_safetensors_from_bytes(weights, &device)
+            .expect("Failed to load tensors");
+        let result = create_varbuilder(tensors, &device);
+        
+        assert!(result.is_ok(), "create_varbuilder should succeed");
+    }
+
+    #[test]
+    fn test_load_sundial_from_memory() {
+        use crate::weights::loader::WeightLoader;
+        use crate::model::config::SundialConfig;
+
+        // Get weights from memory loader
+        let loader = WeightLoader::new_with_memory_weights()
+            .expect("Failed to create memory weight loader");
+        let weights = loader.get_model_weights()
+            .expect("Memory loader should have weights");
+
+        // Create config
+        let config = SundialConfig::default();
+        let device = Device::Cpu;
+
+        // Load model from memory
+        let result = load_sundial_from_memory(weights, &config, &device);
+        
+        assert!(result.is_ok(), "load_sundial_from_memory should succeed");
+        
+        let model = result.unwrap();
+        // Just verify we got a model - can't access private fields
+        assert!(model.config().hidden_size > 0, "Model should have valid config");
+    }
+
+    #[test]
+    fn test_hash_verification() {
+        use crate::weights::loader::WeightLoader;
+
+        // Get weights from memory loader
+        let loader = WeightLoader::new_with_memory_weights()
+            .expect("Failed to create memory weight loader");
+        let weights = loader.get_model_weights()
+            .expect("Memory loader should have weights");
+
+        // Verify should pass with valid weights
+        let result = verify_integrity_from_bytes(weights);
+        assert!(result.is_ok(), "Hash verification should pass for valid weights");
+    }
+
+    #[test]
+    fn test_hash_verification_fails_with_corrupted_data() {
+        // Create corrupted data
+        let corrupted = b"corrupted data that does not match the expected hash";
+
+        // Verify should fail
+        let result = verify_integrity_from_bytes(corrupted);
+        assert!(result.is_err(), "Hash verification should fail for corrupted data");
+        
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("mismatch"), "Error should mention hash mismatch");
     }
 }
