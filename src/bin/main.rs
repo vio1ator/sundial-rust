@@ -16,7 +16,41 @@ use tracing::info;
 #[command(about = "Portable CLI tool for time series forecasting")]
 #[command(long_about = "Sundial CLI - Time Series Forecasting Tool
 
-A portable CLI tool for loading time series data and generating forecasts using pre-trained Candle ML models.
+═══════════════════════════════════════════════════════════
+🤖 ABOUT SUNDIAL
+═══════════════════════════════════════════════════════════
+
+Sundial is a state-of-the-art time series forecasting model that combines flow matching with transformer architecture.
+
+HOW IT WORKS:
+  1. Patch Encoding: Input sequences are divided into patches and encoded into embeddings
+  2. Transformer Processing: 12-layer transformer with cross-attention processes the patches
+  3. Flow Matching: Probabilistic forecasting using flow-based generative modeling
+  4. Euler Integration: Generates forecasts by solving the probability flow ODE
+
+KEY ADVANTAGES:
+  • Probabilistic forecasts with uncertainty quantification
+  • No Python dependencies - runs on pure Rust with Candle ML
+  • Fast inference with embedded model weights
+  • Supports multiple input formats (CSV, Parquet)
+  • Configurable forecast horizon and window sizes
+
+MODEL SPECIFICATIONS:
+  • Hidden size: 768
+  • Layers: 12
+  • Attention heads: 12
+  • Model size: 128M parameters
+
+═══════════════════════════════════════════════════════════
+📚 ATTRIBUTION
+═══════════════════════════════════════════════════════════
+
+Authors: Haixu Wu, Tengge Hu, et al.
+
+Paper: \"Sundial: A Family of Foundation Models for Time Series Forecasting\"
+
+GitHub: https://github.com/thuml/Sundial
+HuggingFace: https://huggingface.co/thuml/sundial-base-128m
 
 ═══════════════════════════════════════════════════════════
 📖 USAGE
