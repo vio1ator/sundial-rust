@@ -483,41 +483,41 @@ async fn run_inference(args: &Args, timestamp_col: &str, value_col: &str) -> Res
         SundialConfig::default()
     };
 
-    // Determine model path: check --model flag first, then use WeightLoader
-    let (model_path, _weight_loader_guard) = if let Some(ref model_path) = args.model {
+    // Determine model source: check --model flag first, then use in-memory embedded weights
+    let model = if let Some(ref model_path) = args.model {
         info!("Using model path from --model flag: {:?}", model_path);
 
         // Validate that the model file exists
         if !model_path.exists() {
             anyhow::bail!(
-                "Model file not found: {}\n\nUsage:\n  - Use --model with a valid path to a .safetensors file\n  - Omit --model to use embedded weights (default behavior)\n  - Check available model paths in the README",
+                "Model file not found: {}\n\nUsage:\n  - Use --model with a valid path to a .safetensors file\n  - Omit --model to use embedded weights in memory (default behavior)\n  - Check available model paths in the README",
                 model_path.display()
             );
         }
 
         if !model_path.is_file() {
             anyhow::bail!(
-                "Model path is not a file: {}\n\nUsage:\n  - --model must point to a .safetensors model file\n  - Omit --model to use embedded weights (default behavior)",
+                "Model path is not a file: {}\n\nUsage:\n  - --model must point to a .safetensors model file\n  - Omit --model to use embedded weights in memory (default behavior)",
                 model_path.display()
             );
         }
 
-        (model_path.clone(), None)
+        info!("Loading model from file: {:?}", model_path);
+        SundialModel::load_from_safetensors(config.clone(), model_path, &device)?
     } else {
-        // No --model flag provided, use WeightLoader to get embedded weights
-        // Keep the loader alive to prevent temp directory cleanup
-        info!("No --model flag provided, using embedded weights via WeightLoader");
+        // No --model flag provided, use embedded weights loaded directly into memory
+        info!("Using embedded weights loaded into memory (no disk extraction)");
         use sundial_rust::WeightLoader;
-        let loader = WeightLoader::new_with_verbose(args.verbose)
-            .context("Failed to create weight loader")?;
-        info!("Embedded weights path: {:?}", loader.model_path());
-        (loader.model_path().to_path_buf(), Some(loader))
+        let loader = WeightLoader::new_with_memory_weights()
+            .context("Failed to load embedded weights into memory")?;
+        
+        // Get the decompressed weights from memory
+        let model_weights = loader.get_model_weights()
+            .expect("Memory loader should have weights");
+        
+        info!("Loading model from {} bytes of in-memory weights", model_weights.len());
+        SundialModel::load_from_safetensors_bytes(config.clone(), model_weights, &device)?
     };
-
-    info!("Loading model from {:?}", model_path);
-
-    // Load the model from safetensors
-    let model = SundialModel::load_from_safetensors(config.clone(), &model_path, &device)?;
 
     info!(
         "Model loaded successfully with config: hidden_size={}, layers={}",

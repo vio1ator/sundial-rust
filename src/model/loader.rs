@@ -112,6 +112,90 @@ pub fn load_safetensors<P: AsRef<Path>>(
     Ok(tensors)
 }
 
+/// Load model weights from safetensors bytes in memory
+///
+/// This allows loading weights without writing to disk.
+///
+/// # Arguments
+/// * `data` - Raw safetensors bytes (decompressed)
+/// * `device` - Device to load tensors on
+///
+/// # Returns
+/// * `Ok(HashMap<String, Tensor>)` with loaded tensors
+/// * `Err(anyhow::Error)` if loading fails
+pub fn load_safetensors_from_bytes(
+    data: &[u8],
+    device: &Device,
+) -> Result<HashMap<String, Tensor>> {
+    // Use safetensors crate directly to parse from memory
+    use safetensors::SafeTensors;
+    
+    let safetensor = SafeTensors::deserialize(data)
+        .map_err(|e| anyhow::anyhow!("Failed to parse safetensors: {}", e))?;
+    
+    let mut tensors = HashMap::new();
+    
+    // Get list of tensors
+    let tensor_list = safetensor.tensors();
+    
+    for (tensor_name, tensor) in tensor_list {
+        // Get shape and dtype
+        let shape: Vec<usize> = tensor.shape().to_vec();
+        let dtype = match tensor.dtype() {
+            safetensors::Dtype::F32 => candle_core::DType::F32,
+            safetensors::Dtype::F64 => candle_core::DType::F64,
+            safetensors::Dtype::U8 => candle_core::DType::U8,
+            safetensors::Dtype::I64 => candle_core::DType::I64,
+            _ => anyhow::bail!("Unsupported dtype: {:?}", tensor.dtype()),
+        };
+        
+        // Get raw data
+        let data_ptr = tensor.data();
+        
+        // Convert to candle tensor
+        // Note: We need to copy the data because safetensors borrows the buffer
+        let tensor_data: Vec<u8> = data_ptr.to_vec();
+        let candle_tensor = match dtype {
+            candle_core::DType::F32 => {
+                let f32_data: Vec<f32> = tensor_data
+                    .chunks(4)
+                    .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                    .collect();
+                Tensor::from_vec(f32_data, shape.as_slice(), device)?
+            }
+            candle_core::DType::F64 => {
+                let f64_data: Vec<f64> = tensor_data
+                    .chunks(8)
+                    .map(|chunk| f64::from_le_bytes([
+                        chunk[0], chunk[1], chunk[2], chunk[3],
+                        chunk[4], chunk[5], chunk[6], chunk[7],
+                    ]))
+                    .collect();
+                Tensor::from_vec(f64_data, shape.as_slice(), device)?
+            }
+            candle_core::DType::U8 => {
+                Tensor::from_vec(tensor_data.clone(), shape.as_slice(), device)?
+            }
+            candle_core::DType::I64 => {
+                let i64_data: Vec<i64> = tensor_data
+                    .chunks(8)
+                    .map(|chunk| i64::from_le_bytes([
+                        chunk[0], chunk[1], chunk[2], chunk[3],
+                        chunk[4], chunk[5], chunk[6], chunk[7],
+                    ]))
+                    .collect();
+                Tensor::from_vec(i64_data, shape.as_slice(), device)?
+            }
+            _ => anyhow::bail!("Unsupported dtype for tensor {}: {:?}", tensor_name, dtype),
+        };
+        
+        tensors.insert(tensor_name.to_string(), candle_tensor);
+    }
+    
+    tracing::info!("Loaded {} tensors from memory", tensors.len());
+    Ok(tensors)
+}
+
 /// Custom backend that retrieves tensors from a HashMap with name mapping
 struct TensorMapBackend {
     tensors: Arc<HashMap<String, Tensor>>,

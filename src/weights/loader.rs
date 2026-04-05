@@ -52,6 +52,8 @@ pub struct WeightLoader {
     model_path: PathBuf,
     config_path: PathBuf,
     verbose: bool,
+    /// Decompressed weights kept in memory (if Some)
+    model_weights: Option<Vec<u8>>,
 }
 
 impl WeightLoader {
@@ -104,6 +106,7 @@ impl WeightLoader {
                 model_path: PathBuf::from(model),
                 config_path: PathBuf::from(config),
                 verbose,
+                model_weights: None,
             })
         } else {
             // Extract embedded weights
@@ -186,6 +189,7 @@ impl WeightLoader {
             model_path,
             config_path,
             verbose,
+            model_weights: None,
         })
     }
 
@@ -202,6 +206,49 @@ impl WeightLoader {
     /// Get the path to the model weights file as String
     pub fn model_path_str(&self) -> &str {
         self.model_path.to_str().unwrap_or("")
+    }
+
+    /// Get the decompressed model weights in memory
+    /// 
+    /// Returns None if weights are loaded from disk or external source.
+    /// Only returns Some(bytes) if weights were decompressed into memory.
+    pub fn get_model_weights(&self) -> Option<&[u8]> {
+        self.model_weights.as_deref()
+    }
+
+    /// Create a weight loader that keeps decompressed weights in memory
+    /// 
+    /// This avoids writing to disk entirely - weights are decompressed
+    /// and held in memory for direct loading by the model.
+    /// 
+    /// # Returns
+    /// * `Ok(WeightLoader)` with in-memory weights
+    /// * `Err(anyhow::Error)` if decompression fails
+    pub fn new_with_memory_weights() -> Result<Self> {
+        tracing::info!("Loading embedded weights into memory");
+
+        // Decompress weights into memory
+        let mut decoder = GzDecoder::new(WEIGHTS_COMPRESSED);
+        let mut decompressed = Vec::new();
+        decoder
+            .read_to_end(&mut decompressed)
+            .context("Failed to decompress weights")?;
+
+        // Verify integrity
+        verify_integrity_from_bytes(&decompressed)?;
+
+        tracing::info!(
+            "Weights decompressed successfully: {} bytes",
+            decompressed.len()
+        );
+
+        Ok(Self {
+            temp_dir: None,
+            model_path: PathBuf::from("<memory>"),
+            config_path: PathBuf::from("<memory>"),
+            verbose: false,
+            model_weights: Some(decompressed),
+        })
     }
 }
 
@@ -396,6 +443,31 @@ pub fn verify_integrity(path: &Path) -> Result<()> {
     }
 
     tracing::debug!("SHA256 hash verified: {}", computed_hash);
+    Ok(())
+}
+
+/// Verify the SHA256 hash of weights from memory
+///
+/// # Arguments
+/// * `weights` - Decompressed weights in memory
+///
+/// # Returns
+/// * `Ok(())` if hash matches
+/// * `Err(anyhow::Error)` if hash doesn't match
+pub fn verify_integrity_from_bytes(weights: &[u8]) -> Result<()> {
+    let mut hasher = Sha256::new();
+    hasher.update(weights);
+    let computed_hash = format!("{:x}", hasher.finalize());
+
+    if computed_hash != MODEL_SHA256 {
+        let err = WeightError::HashMismatch {
+            expected: MODEL_SHA256.to_string(),
+            computed: computed_hash,
+        };
+        return Err(anyhow::anyhow!("{}", err)).context("Weights integrity verification failed");
+    }
+
+    tracing::debug!("SHA256 hash verified (memory): {}", computed_hash);
     Ok(())
 }
 
@@ -660,5 +732,22 @@ mod tests {
         // Clean up environment variables
         std::env::remove_var("SUNDIAL_MODEL_PATH");
         std::env::remove_var("SUNDIAL_CONFIG_PATH");
+    }
+
+    #[test]
+    fn test_new_with_memory_weights() {
+        // Test that we can load weights into memory without disk extraction
+        let loader = WeightLoader::new_with_memory_weights()
+            .expect("Failed to create memory weight loader");
+        
+        // Verify weights are in memory
+        let weights = loader.get_model_weights()
+            .expect("Memory loader should have weights");
+        
+        assert!(!weights.is_empty(), "Weights should not be empty");
+        assert!(weights.len() > 1000000, "Weights should be substantial (>1MB)");
+        
+        // Verify model path is marked as memory
+        assert_eq!(loader.model_path(), std::path::Path::new("<memory>"));
     }
 }

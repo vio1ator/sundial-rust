@@ -163,6 +163,37 @@ impl SundialModel {
         &self.model
     }
 
+    /// Load model from safetensors bytes in memory
+    ///
+    /// This allows loading weights without writing to disk.
+    ///
+    /// # Arguments
+    /// * `config` - Model configuration
+    /// * `data` - Raw safetensors bytes (decompressed)
+    /// * `device` - Device to load model on
+    ///
+    /// # Returns
+    /// * `Ok(SundialModel)` with loaded weights
+    /// * `Err(candle_core::Error)` if loading fails
+    pub fn load_from_safetensors_bytes(
+        config: SundialConfig,
+        data: &[u8],
+        device: &Device,
+    ) -> candle_core::Result<Self> {
+        use crate::model::loader::load_safetensors_from_bytes;
+
+        let tensors = load_safetensors_from_bytes(data, device)
+            .map_err(|e| candle_core::Error::Msg(format!("Failed to load safetensors from bytes: {}", e)))?;
+        tracing::info!("Loaded {} tensors from memory", tensors.len());
+
+        // Create VarBuilder from loaded tensors with proper mapping
+        let vb = crate::model::loader::create_varbuilder(tensors, device)
+            .map_err(|e| candle_core::Error::Msg(format!("Failed to create varbuilder: {}", e)))?;
+
+        tracing::info!("Creating SundialModel with loaded weights from memory...");
+        SundialModel::new(&config, vb)
+    }
+
     /// Load model from safetensors file
     ///
     /// Automatically resolves the model path using WeightLoader, which checks:
