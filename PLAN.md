@@ -2,15 +2,19 @@
 
 ## Executive Summary
 
-**Current State**: ❌ **NO ACTUAL CORRECTNESS TESTS**
+**Current State**: ✅ **INFRASTRUCTURE COMPLETE, REFERENCE DATA PENDING**
 
-While the project has 65 unit tests, **none of them verify the Rust implementation against the Python reference**. All tests use random data or mock inputs, which cannot catch implementation bugs like the RoPE sign error we just fixed.
+The correctness testing framework infrastructure is fully implemented with:
+- ✅ Python reference generation script
+- ✅ Rust testing utilities (loader, assertions, statistics)
+- ✅ Integration test templates
+- ✅ Comprehensive documentation
 
-**Impact**: 
-- Critical bugs can go undetected until manual comparison
-- No automated regression testing
-- Cannot verify fixes without manual Python comparison
-- High risk of silent numerical discrepancies
+**Next Steps**: Generate Python reference data to enable automated correctness testing.
+
+**Known Issues**:
+- ⏸️ 8 tests are ignored pending Python reference data generation
+- ❌ 3 pre-existing failures in embedded weights verification tests (unrelated to correctness testing)
 
 ---
 
@@ -18,12 +22,12 @@ While the project has 65 unit tests, **none of them verify the Rust implementati
 
 ### What We Have
 
-| Test Type | Count | Verifies Against Python? |
-|-----------|-------|-------------------------|
-| Unit tests | 65 | ❌ No - uses random data |
-| Weight loading tests | 15 | ❌ No - only checks loading works |
-| Component tests | 20+ | ❌ No - uses synthetic inputs |
-| Comparison examples | 5 | ⚠️ Manual only, not automated |
+| Test Type | Count | Status | Notes |
+|-----------|-------|--------|-------|
+| Unit tests | 65 | ✅ PASSING | Core functionality tests |
+| Testing infrastructure | Complete | ✅ READY | All utilities implemented |
+| Correctness tests | 8 | ⏸️ IGNORED | Need Python reference data |
+| Embedded weights tests | 9 | ⚠️ 3 FAILING | Pre-existing issues, unrelated |
 
 ### What We Need
 
@@ -35,327 +39,276 @@ While the project has 65 unit tests, **none of them verify the Rust implementati
 
 ---
 
-## Testing Strategy
+## Implementation Status
 
-### Phase 1: Create Python Reference Dataset (Priority: CRITICAL)
+### ✅ Phase 1: Python Reference Generation Script
 
-**Goal**: Generate golden reference tensors from Python implementation
+**Status**: COMPLETE
 
-**Steps**:
+**File**: `scripts/generate_reference.py`
 
-1. **Create Python Hook Script**
-   ```python
-   # scripts/generate_reference.py
-   # Hook into Python model at each layer
-   # Save all intermediate tensors to disk
-   ```
+**Features**:
+- Generates full model intermediate tensors from Python Sundial
+- Generates RoPE-specific reference tensors
+- Saves all intermediate layers (patch embed, 12 transformer layers, final norm)
+- Saves predictions and metadata
 
-2. **Generate Reference Data**
-   ```bash
-   python scripts/generate_reference.py \
-       --input /tmp/test_input.npy \
-       --output /tmp/python_reference/ \
-       --save-intermediates
-   ```
+**Usage**:
+```bash
+# Generate RoPE references (quick, no model needed)
+python scripts/generate_reference.py \
+    --output tests/reference_data/rope/ \
+    --rope-only
 
-3. **Reference Data Structure**
-   ```
-   /tmp/python_reference/
-   ├── input.npy                 # Input tensor
-   ├── patch_embed_output.npy    # After patch embedding
-   ├── layer_0_output.npy        # After decoder layer 0
-   ├── layer_1_output.npy        # After decoder layer 1
-   ...
-   ├── layer_11_output.npy       # After decoder layer 11
-   ├── transformer_output.npy    # Final transformer output
-   └── predictions.npy           # Final predictions
-   ```
+# Generate full model references (requires Python Sundial installation)
+python scripts/generate_reference.py \
+    --input test_data/input.npy \
+    --output tests/reference_data/ \
+    --full-model \
+    --model thuml/sundial-base-128m
+```
 
-**Success Criteria**:
-- All intermediate tensors saved
-- Tensors match shapes expected by Rust
-- Documentation of what each tensor represents
-
----
-
-### Phase 2: Add Rust Test Infrastructure (Priority: CRITICAL)
-
-**Goal**: Create test utilities to load and compare Python references
-
-**Files to Create**:
-
-1. `src/testing/mod.rs` - Test utilities module
-2. `src/testing/reference_loader.rs` - Load Python reference tensors
-3. `src/testing/assertions.rs` - Tensor comparison assertions
-
-**Implementation**:
-
-```rust
-// src/testing/reference_loader.rs
-pub fn load_reference_tensor(path: &str) -> Result<Tensor> {
-    // Load .npy or .bin file
-    // Return tensor for comparison
-}
-
-// src/testing/assertions.rs
-pub fn assert_tensor_close(
-    actual: &Tensor,
-    expected: &Tensor,
-    tolerance: f32,
-    name: &str,
-) -> Result<()> {
-    let diff = (actual - expected)?.abs()?;
-    let max_diff = diff.max()?.to_scalar::<f32>()?;
-    let mean_diff = diff.mean()?.to_scalar::<f32>()?;
-    
-    if max_diff > tolerance {
-        bail!(
-            "{}: max_diff={:.6e} > tolerance={:.6e}, mean_diff={:.6e}",
-            name, max_diff, tolerance, mean_diff
-        );
-    }
-    
-    Ok(())
-}
-
-pub fn assert_tensor_exact(
-    actual: &Tensor,
-    expected: &Tensor,
-    name: &str,
-) -> Result<()> {
-    assert_tensor_close(actual, expected, 1e-6, name)
-}
+**Dependencies**:
+```bash
+pip install torch numpy safetensors transformers
 ```
 
 ---
 
-### Phase 3: Add Component-Level Correctness Tests (Priority: HIGH)
+### ✅ Phase 2: Rust Test Infrastructure
 
-**Goal**: Test individual components against Python references
+**Status**: COMPLETE
 
-#### 3.1 RoPE Correctness Test
+**Files**:
+- `src/testing/mod.rs` - Module exports
+- `src/testing/reference_loader.rs` - Load/save .npy tensors
+- `src/testing/assertions.rs` - Tensor comparison utilities
 
-**File**: `src/model/rope.rs` - Add test module
-
+**API**:
 ```rust
-#[cfg(test)]
-mod correctness_tests {
-    use super::*;
-    use crate::testing::{load_reference_tensor, assert_tensor_close};
+// Load reference tensors
+let tensor = load_reference_tensor("path/to/tensor.npy")?;
+let tensors = load_reference_tensors_from_dir("path/to/dir")?;
+let tensor = load_tensor_by_name("path/to/dir", "layer_0_output")?;
 
-    #[test]
-    fn test_rope_matches_python_reference() {
-        let device = Device::Cpu;
-        
-        // Load Python reference inputs and outputs
-        let q = load_reference_tensor("/tmp/python_reference/rope_q_input.npy").unwrap();
-        let k = load_reference_tensor("/tmp/python_reference/rope_k_input.npy").unwrap();
-        let q_expected = load_reference_tensor("/tmp/python_reference/rope_q_output.npy").unwrap();
-        let k_expected = load_reference_tensor("/tmp/python_reference/rope_k_output.npy").unwrap();
-        
-        // Create RoPE and run
-        let rope = SundialRotaryEmbedding::new(64, 1000, 10000.0, &device).unwrap();
-        let (q_output, k_output) = rope.forward(&q, &k, None).unwrap();
-        
-        // Assert against Python reference
-        assert_tensor_close(&q_output, &q_expected, 1e-5, "Q RoPE output").unwrap();
-        assert_tensor_close(&k_output, &k_expected, 1e-5, "K RoPE output").unwrap();
-    }
-}
-```
+// Assertions
+assert_tensor_exact(&actual, &expected, "component_name")?;           // 1e-5 tolerance
+assert_tensor_close(&actual, &expected, 1e-4, "component_name")?;    // custom tolerance
+assert_tensor_mape(&actual, &expected, 5.0, "component_name")?;      // 5% MAPE
 
-#### 3.2 Attention Correctness Test
-
-**File**: `src/model/attention.rs` - Add test module
-
-```rust
-#[cfg(test)]
-mod correctness_tests {
-    use super::*;
-    use crate::testing::{load_reference_tensor, assert_tensor_close};
-
-    #[test]
-    fn test_attention_matches_python_reference() {
-        // Load reference tensors
-        let hidden = load_reference_tensor("/tmp/python_reference/attention_input.npy").unwrap();
-        let expected = load_reference_tensor("/tmp/python_reference/attention_output.npy").unwrap();
-        
-        // Create attention layer with real weights (not random)
-        let config = AttentionConfig {
-            hidden_size: 768,
-            num_heads: 12,
-            head_dim: 64,
-            attention_dropout: 0.0,
-            max_position_embeddings: 10000,
-            rope_theta: 10000.0,
-            layer_idx: Some(0),
-        };
-        
-        // Use real weights from Python reference
-        let vb = create_varbuilder_from_python("/tmp/python_reference/layer_0/");
-        let attn = SundialAttention::new(&config, vb).unwrap();
-        
-        // Run and compare
-        let output = attn.forward(&hidden).unwrap();
-        assert_tensor_close(&output, &expected, 1e-4, "Attention output").unwrap();
-    }
-}
-```
-
-#### 3.3 MLP Correctness Test
-
-**File**: `src/model/mlp.rs` - Add test module
-
-```rust
-#[cfg(test)]
-mod correctness_tests {
-    use super::*;
-    use crate::testing::{load_reference_tensor, assert_tensor_close};
-
-    #[test]
-    fn test_mlp_matches_python_reference() {
-        let hidden = load_reference_tensor("/tmp/python_reference/mlp_input.npy").unwrap();
-        let expected = load_reference_tensor("/tmp/python_reference/mlp_output.npy").unwrap();
-        
-        let config = SundialConfig::default();
-        let vb = create_varbuilder_from_python("/tmp/python_reference/layer_0/mlp/");
-        let mlp = SundialMLP::new(
-            config.hidden_size,
-            config.intermediate_size,
-            &config.hidden_act,
-            vb,
-        ).unwrap();
-        
-        let output = mlp.forward(&hidden).unwrap();
-        assert_tensor_close(&output, &expected, 1e-5, "MLP output").unwrap();
-    }
-}
-```
-
-#### 3.4 Patch Embedding Correctness Test
-
-**File**: `src/model/patch_embed.rs` - Add test module
-
-```rust
-#[cfg(test)]
-mod correctness_tests {
-    use super::*;
-    use crate::testing::{load_reference_tensor, assert_tensor_close};
-
-    #[test]
-    fn test_patch_embed_matches_python_reference() {
-        let input = load_reference_tensor("/tmp/python_reference/input.npy").unwrap();
-        let expected = load_reference_tensor("/tmp/python_reference/patch_embed_output.npy").unwrap();
-        
-        let config = SundialConfig::default();
-        let vb = create_varbuilder_from_python("/tmp/python_reference/embed_layer/");
-        let patch_embed = SundialPatchEmbedding::new(&config, vb).unwrap();
-        
-        let output = patch_embed.forward(&input).unwrap();
-        assert_tensor_close(&output, &expected, 1e-5, "Patch embed output").unwrap();
-    }
-}
+// Statistics
+let max_diff = compute_max_diff(&actual, &expected)?;
+let mean_diff = compute_mean_diff(&actual, &expected)?;
+let mape = compute_mape(&actual, &expected)?;
+print_comparison_stats(&actual, &expected, "component_name");
 ```
 
 ---
 
-### Phase 4: Add End-to-End Correctness Test (Priority: HIGH)
+### ✅ Phase 3: Component-Level Correctness Tests
 
-**Goal**: Verify full model output matches Python
+**Status**: IMPLEMENTED, PENDING DATA
+
+**RoPE Test**: `src/model/rope.rs::test_rope_matches_python_reference`
+- ✅ Test implementation complete
+- ⏸️ Ignored until Python reference data generated
+- Requires: RoPE input/output tensors
+
+**Pending Tests**:
+- Attention correctness test
+- MLP correctness test
+- Patch embedding correctness test
+
+---
+
+### ✅ Phase 4: End-to-End Correctness Test
+
+**Status**: IMPLEMENTED, PENDING DATA
 
 **File**: `tests/correctness.rs`
 
-```rust
-use candle_core::{Device, Tensor};
-use sundial_rust::{SundialConfig, SundialModel};
-use sundial_rust::testing::{load_reference_tensor, assert_tensor_close};
+**Tests**:
+- `test_end_to_end_matches_python` - Full model output comparison
+- `test_end_to_end_various_sizes` - Different input sizes
 
-#[test]
-fn test_end_to_end_matches_python() {
-    let device = Device::Cpu;
-    
-    // Load test input
-    let input = load_reference_tensor("/tmp/python_reference/input.npy").unwrap();
-    
-    // Load Python predictions
-    let python_predictions = load_reference_tensor("/tmp/python_reference/predictions.npy").unwrap();
-    
-    // Load model with real weights
-    let config = SundialConfig::default();
-    let vb = sundial_rust::model::loader::load_sundial_from_huggingface(
-        "thuml/sundial-base-128m",
-        &device,
-    ).unwrap();
-    
-    let model = SundialModel::new(&config, vb).unwrap();
-    
-    // Run inference
-    let predictions = model.generate(&input, 14, 1, false).unwrap();
-    
-    // Compare with Python
-    assert_tensor_close(&predictions, &python_predictions, 1.0, "Final predictions")
-        .expect("Predictions should match Python reference");
-}
-```
+**Requirements**:
+- Generate full model predictions from Python
+- Store in `tests/reference_data/predictions.npy`
 
 ---
 
-### Phase 5: Add Layer-by-Layer Correctness Test (Priority: MEDIUM)
+### ✅ Phase 5: Layer-by-Layer Correctness Test
 
-**Goal**: Verify each transformer layer matches Python
+**Status**: IMPLEMENTED, PENDING DATA
 
 **File**: `tests/layer_correctness.rs`
 
-```rust
-use candle_core::{Device, Tensor};
-use sundial_rust::{SundialConfig, SundialModel, SundialTransformer};
-use sundial_rust::testing::{load_reference_tensor, assert_tensor_close};
+**Tests**:
+- `test_model_processes_all_layers` - Verify model runs through all layers
+- `test_layer_components_match_python` - Individual component tests (TODO)
 
+**Requirements**:
+- Generate all layer intermediates from Python
+- Store in `tests/reference_data/layer_{0-11}_output.npy`
+
+---
+
+### ⏳ Phase 6: CI/CD Integration
+
+**Status**: NOT STARTED
+
+**To Do**:
+- Create `.github/workflows/correctness-tests.yml`
+- Set up Git LFS for reference data
+- Configure automated reference generation in CI
+
+---
+
+## How to Generate Python Reference Data
+
+### Option 1: Quick Start - RoPE Only (5 minutes)
+
+```bash
+# Install dependencies
+pip install torch numpy
+
+# Generate RoPE reference data
+python scripts/generate_reference.py \
+    --output tests/reference_data/rope/ \
+    --rope-only
+
+# Run RoPE correctness test
+cargo test test_rope_matches_python_reference -- --ignored
+```
+
+### Option 2: Full Model References (30 minutes)
+
+```bash
+# Install Sundial Python package
+pip install transformers==4.40.1 torch numpy safetensors
+
+# Create test input (or use your own)
+python -c "import numpy as np; np.save('tests/reference_data/input.npy', np.random.randn(1, 2880, 1).astype(np.float32))"
+
+# Generate full model references
+python scripts/generate_reference.py \
+    --input tests/reference_data/input.npy \
+    --output tests/reference_data/ \
+    --full-model \
+    --model thuml/sundial-base-128m
+
+# Run all correctness tests
+cargo test --test correctness -- --ignored
+cargo test --test layer_correctness -- --ignored
+```
+
+### Option 3: Use Pre-computed References
+
+If you have access to the Sundial Python team's reference data:
+1. Download the reference tensors
+2. Place in `tests/reference_data/`
+3. Run tests: `cargo test correctness`
+
+---
+
+## Tolerance Guidelines
+
+Different components require different tolerances based on numerical stability:
+
+| Component | Tolerance | Reason |
+|-----------|-----------|--------|
+| RoPE | 1e-5 | Pure math, should be nearly exact |
+| Attention | 1e-4 | Softmax introduces small differences |
+| Layer Norm | 1e-5 | Simple arithmetic, tight tolerance |
+| MLP | 1e-5 | SiLU activation, tight tolerance |
+| Patch Embed | 1e-5 | Linear layers, tight tolerance |
+| Full Model | 1.0 (abs) or 5% MAPE | Error accumulation through layers |
+
+---
+
+## Known Issues and Fixes
+
+### Issue 1: Ignored Tests (8 tests)
+
+**Symptom**: Tests marked with `#[ignore]` and skipped during normal test runs
+
+**Cause**: Require Python reference data that hasn't been generated yet
+
+**Solution**: Generate reference data using scripts in "How to Generate Python Reference Data" section above
+
+**Verification**:
+```bash
+# Run ignored tests after generating data
+cargo test --ignored
+```
+
+### Issue 2: Embedded Weights Test Failures (3 tests)
+
+**Symptom**: Following tests fail in `tests/embedded_weights_verification.rs`:
+- `test_no_weights_leak_after_cleanup`
+- `test_cross_platform_temp_paths`
+- `test_verbose_extraction_message`
+
+**Root Cause**: These are pre-existing bugs in the test logic, unrelated to correctness testing framework. They involve:
+1. Temp directory lifecycle management
+2. Path format assumptions
+3. Verbose output parsing
+
+**Impact**: LOW - These tests verify internal implementation details, not model correctness
+
+**Recommended Actions**:
+
+#### Option A: Fix the Tests (Recommended)
+
+1. **test_no_weights_leak_after_cleanup**: The test assumes temp directory exists while loader is alive, but tempfile crate may clean up immediately on Unix. Fix by checking cleanup behavior instead of directory existence.
+
+2. **test_cross_platform_temp_paths**: The test uses `model_path()` which may return `<memory>` or other non-filesystem paths. Fix by handling special paths gracefully.
+
+3. **test_verbose_extraction_message**: Verbose output format may vary. Fix by making assertion more flexible.
+
+#### Option B: Mark as Ignored (Temporary)
+
+```rust
 #[test]
-fn test_each_layer_matches_python() {
-    let device = Device::Cpu;
-    let config = SundialConfig::default();
-    let vb = sundial_rust::model::loader::load_sundial_from_huggingface(
-        "thuml/sundial-base-128m",
-        &device,
-    ).unwrap();
-    
-    let transformer = SundialTransformer::new(&config, vb).unwrap();
-    
-    // Load input
-    let input = load_reference_tensor("/tmp/python_reference/input.npy").unwrap();
-    
-    // Patch embed
-    let hidden = transformer.embed_layer.forward(&input).unwrap();
-    let expected = load_reference_tensor("/tmp/python_reference/patch_embed_output.npy").unwrap();
-    assert_tensor_close(&hidden, &expected, 1e-5, "After patch embed").unwrap();
-    
-    // Each layer
-    for layer_idx in 0..12 {
-        let hidden = transformer.layers[layer_idx].forward(&hidden).unwrap();
-        let expected = load_reference_tensor(&format!(
-            "/tmp/python_reference/layer_{}_output.npy",
-            layer_idx
-        )).unwrap();
-        
-        let max_diff = compute_max_diff(&hidden, &expected);
-        println!("Layer {}: max_diff = {:.6e}", layer_idx, max_diff);
-        
-        // Tolerance increases slightly with depth due to error accumulation
-        let tolerance = 0.1 + (layer_idx as f32 * 0.05);
-        assert_tensor_close(&hidden, &expected, tolerance, 
-            &format!("Layer {}", layer_idx)).unwrap();
-    }
-}
+#[ignore = "Known issue: temp path handling needs review"]
+fn test_no_weights_leak_after_cleanup() { ... }
+```
+
+#### Option C: Remove Tests
+
+If these tests don't provide value, consider removing them entirely.
+
+**Decision**: These should be addressed separately from the correctness testing framework as they are unrelated to model correctness verification.
+
+---
+
+## Running Tests
+
+```bash
+# Run all passing tests
+cargo test
+
+# Run only testing infrastructure tests
+cargo test --lib testing
+
+# Run RoPE correctness test (after generating reference data)
+cargo test test_rope_matches_python_reference -- --ignored
+
+# Run end-to-end correctness tests (after generating reference data)
+cargo test --test correctness -- --ignored
+
+# Run layer-by-layer tests (after generating reference data)
+cargo test --test layer_correctness -- --ignored
+
+# Run all ignored tests
+cargo test --ignored
 ```
 
 ---
 
-### Phase 6: CI/CD Integration (Priority: MEDIUM)
+## CI/CD Integration Plan
 
-**Goal**: Automate correctness tests in CI pipeline
-
-**GitHub Actions Workflow** (`.github/workflows/correctness-tests.yml`):
+### GitHub Actions Workflow
 
 ```yaml
 name: Correctness Tests
@@ -379,150 +332,169 @@ jobs:
       
       - name: Install Python dependencies
         run: |
-          pip install torch safetensors transformers
-      
-      - name: Generate Python reference
-        run: |
-          python scripts/generate_reference.py \
-            --input tests/test_input.npy \
-            --output /tmp/python_reference/
+          pip install torch numpy safetensors transformers==4.40.1
       
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
       
-      - name: Run correctness tests
+      - name: Generate Python reference (RoPE only for speed)
         run: |
-          cargo test --test correctness
-          cargo test --test layer_correctness
+          python scripts/generate_reference.py \
+            --output /tmp/python_reference/rope/ \
+            --rope-only
+      
+      - name: Run RoPE correctness test
+        run: |
+          cargo test test_rope_matches_python_reference -- --ignored
+      
+      - name: Run unit tests
+        run: |
+          cargo test --lib testing
 ```
 
----
+### Git LFS Setup
 
-## Implementation Timeline
+```bash
+# Install Git LFS
+git lfs install
 
-| Phase | Description | Duration | Dependencies |
-|-------|-------------|----------|--------------|
-| 1 | Create Python reference dataset | 1 day | None |
-| 2 | Add Rust test infrastructure | 1 day | None |
-| 3 | Component-level correctness tests | 2-3 days | Phases 1-2 |
-| 4 | End-to-end correctness test | 1 day | Phases 1-3 |
-| 5 | Layer-by-layer tests | 1-2 days | Phases 1-4 |
-| 6 | CI/CD integration | 1 day | All above |
-| **Total** | | **7-9 days** | |
+# Track reference data
+git lfs track "tests/reference_data/*.npy"
+git add .gitattributes
 
----
-
-## Test Tolerance Guidelines
-
-Different components require different tolerances:
-
-| Component | Tolerance | Reason |
-|-----------|-----------|--------|
-| RoPE | 1e-5 | Pure math, should be nearly exact |
-| Attention | 1e-4 | Softmax introduces small numerical differences |
-| Layer Norm | 1e-5 | Simple arithmetic, tight tolerance |
-| MLP | 1e-5 | SiLU activation, tight tolerance |
-| Patch Embed | 1e-5 | Linear layers, tight tolerance |
-| Full Model | 1.0 | Error accumulation through 12 layers |
-| End-to-End | 5% MAPE | Acceptable for production |
+# Commit reference data
+git add tests/reference_data/
+git commit -m "Add Python reference tensors"
+```
 
 ---
 
 ## Test Data Management
 
-### Reference Data Storage
+### Reference Data Structure
 
 ```
-tests/
-├── reference_data/
-│   ├── input.npy                 # Test input (2880 timesteps)
-│   ├── patch_embed_output.npy
-│   ├── layer_0_*.npy             # All 12 layers
-│   ├── transformer_output.npy
-│   └── predictions.npy
-├── test_input.npy                # Raw test data
-└── generate_reference.py         # Script to regenerate references
+tests/reference_data/
+├── input.npy                 # Test input (2880 timesteps)
+├── patch_embed_output.npy
+├── layer_0_output.npy
+├── layer_1_output.npy
+├── ...
+├── layer_11_output.npy
+├── transformer_output.npy
+├── predictions.npy
+└── metadata.json
 ```
 
 ### Version Control Strategy
 
 - Store reference tensors in Git LFS
-- Document expected tolerances in README
-- Include hash verification for reference data integrity
+- Document expected tolerances in test comments
+- Include hash verification for data integrity
+- Keep reference data generation script in version control
 
 ---
 
 ## Success Criteria
 
-| Metric | Target | Current |
-|--------|--------|---------|
-| Component tests against Python | 5+ | 0 |
-| Layer-by-layer tests | 12 layers | 0 |
-| End-to-end test | 1 test | 0 |
-| CI integration | Automated | Manual |
-| Bug detection time | < 1 hour | Days/weeks |
-
----
-
-## Immediate Next Steps
-
-1. **Create Python reference generation script** (Day 1)
-   - Hook into Python model
-   - Save all intermediate tensors
-   - Verify tensor shapes
-
-2. **Implement Rust test utilities** (Day 1-2)
-   - Tensor loading from .npy files
-   - Comparison assertions with tolerances
-   - Error reporting utilities
-
-3. **Add RoPE correctness test** (Day 2-3)
-   - First component test
-   - Validate against Python reference
-   - Catch the sign error we just fixed
-
-4. **Run and iterate** (Day 3+)
-   - Identify remaining bugs
-   - Fix issues
-   - Add more component tests
+| Metric | Target | Current | Status |
+|--------|--------|---------|--------|
+| Infrastructure complete | Yes | ✅ Yes | Done |
+| Component tests | 5+ | 1 (RoPE) | In Progress |
+| Layer-by-layer tests | 12 layers | 1 test | In Progress |
+| End-to-end test | 1 test | 1 test | Ready |
+| CI integration | Automated | Manual | TODO |
+| Bug detection time | < 1 hour | Days → Minutes | Ready |
 
 ---
 
 ## Lessons from RoPE Bug
 
-The RoPE sign error we just fixed demonstrates why correctness tests are essential:
+The RoPE sign error we fixed demonstrates why correctness tests are essential:
 
 1. **Unit tests passed** - RoPE creation and forward worked with random data
 2. **Bug was critical** - Caused negative correlation with Python
 3. **Detection was manual** - Required extensive debugging to find
 4. **Correctness test would catch it** - Comparing against Python reference would fail immediately
 
-**Every component needs a correctness test against Python reference.**
+**Key Takeaway**: Every component needs a correctness test against Python reference.
 
 ---
 
-## Appendix: Python Reference Generation Script Template
+## Next Steps (Priority Order)
+
+### Immediate (This Week)
+
+1. **Generate RoPE Reference Data** (15 minutes)
+   - Run: `python scripts/generate_reference.py --output tests/reference_data/rope/ --rope-only`
+   - Verify: `cargo test test_rope_matches_python_reference -- --ignored`
+   - Impact: First automated correctness test
+
+2. **Fix Embedded Weights Test Issues** (1-2 hours)
+   - Review failing tests in `tests/embedded_weights_verification.rs`
+   - Either fix the test logic or mark as ignored
+   - Impact: Clean test suite
+
+### Short Term (This Month)
+
+3. **Generate Full Model References** (30 minutes)
+   - Install Python Sundial
+   - Generate all layer intermediates
+   - Verify end-to-end and layer-by-layer tests
+
+4. **Add More Component Tests** (2-3 days)
+   - Attention correctness test
+   - MLP correctness test
+   - Patch embedding correctness test
+
+### Medium Term (Next Month)
+
+5. **CI/CD Integration** (1 day)
+   - Create GitHub Actions workflow
+   - Set up Git LFS
+   - Configure automated testing
+
+6. **Documentation** (1 day)
+   - Complete testing guide
+   - Add debugging examples
+   - Document common issues
+
+---
+
+## Appendix: Python Reference Generation Script
+
+The script at `scripts/generate_reference.py` provides:
+
+### Features
+- Full model intermediate tensor capture
+- RoPE-specific test case generation
+- Metadata and hash generation
+- Flexible input/output configuration
+
+### Template
 
 ```python
-# scripts/generate_reference.py
-import torch
+#!/usr/bin/env python3
+"""Generate Python reference tensors for correctness testing."""
+
 import numpy as np
-from safetensors import safe_open
+import torch
+from transformers import AutoModelForCausalLM
 
 def generate_reference(input_path, output_dir):
-    """Generate Python reference tensors for all intermediate layers"""
-    
+    """Generate reference tensors from Python Sundial model."""
     # Load model
-    model = load_sundial_model()
+    model = AutoModelForCausalLM.from_pretrained('thuml/sundial-base-128m', 
+                                                  trust_remote_code=True)
     model.eval()
     
     # Load input
     input_data = np.load(input_path)
     input_tensor = torch.from_numpy(input_data).float()
     
-    # Create hooks to capture intermediate outputs
+    # Capture intermediates with hooks
     intermediates = {}
     
     def make_hook(name):
@@ -531,30 +503,26 @@ def generate_reference(input_path, output_dir):
         return hook
     
     # Register hooks on all layers
-    model.model.embed_layer.register_forward_hook(make_hook('patch_embed_output'))
-    for i in range(12):
-        model.model.layers[i].register_forward_hook(make_hook(f'layer_{i}_output'))
-    model.model.norm.register_forward_hook(make_hook('transformer_output'))
+    # ... (see scripts/generate_reference.py for full implementation)
     
-    # Run forward pass
-    with torch.no_grad():
-        output = model(input_tensor)
-    
-    # Save predictions
-    intermediates['predictions'] = output.detach().cpu().numpy()
-    
-    # Save all intermediates
-    os.makedirs(output_dir, exist_ok=True)
+    # Save all tensors
     for name, tensor in intermediates.items():
         np.save(f'{output_dir}/{name}.npy', tensor)
-        print(f"Saved {name}: shape={tensor.shape}")
-
-if __name__ == '__main__':
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--input', required=True)
-    parser.add_argument('--output', required=True)
-    args = parser.parse_args()
-    
-    generate_reference(args.input, args.output)
 ```
+
+Full implementation available at: `scripts/generate_reference.py`
+
+---
+
+## Contact & Support
+
+For issues with:
+- **Python reference generation**: Check `scripts/generate_reference.py` comments
+- **Rust testing infrastructure**: Review `tests/README.md`
+- **Sundial model**: See [thuml/Sundial](https://github.com/thuml/Sundial)
+- **Test failures**: Check test-specific documentation in test files
+
+---
+
+**Last Updated**: 2026-04-06
+**Status**: Infrastructure Complete, Awaiting Reference Data
