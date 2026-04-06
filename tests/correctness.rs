@@ -1,0 +1,83 @@
+//! End-to-end correctness tests against Python reference
+//!
+//! These tests verify that the full Sundial model produces outputs
+//! matching the Python implementation.
+
+use candle_core::{Device, Tensor};
+use sundial_rust::{SundialConfig, SundialModel};
+use sundial_rust::testing::{load_reference_tensor, assert_tensor_close, print_comparison_stats};
+
+/// Test that end-to-end model output matches Python reference
+///
+/// This test loads a pre-computed input, runs it through the Rust model,
+/// and compares the predictions against Python reference outputs.
+///
+/// Prerequisites:
+/// - Generate Python reference: `python scripts/generate_reference.py --input test_data/input.npy --output tests/reference_data/ --full-model`
+#[test]
+#[ignore = "Requires Python reference data to be generated first"]
+fn test_end_to_end_matches_python() {
+    let device = Device::Cpu;
+    
+    // Load test input
+    let input = load_reference_tensor("tests/reference_data/input.npy")
+        .expect("Failed to load test input");
+    
+    // Load Python predictions
+    let python_predictions = load_reference_tensor("tests/reference_data/predictions.npy")
+        .expect("Failed to load Python predictions");
+    
+    // Load model with real weights
+    let config = SundialConfig::default();
+    let vb = sundial_rust::model::loader::load_sundial_from_huggingface(
+        "thuml/sundial-base-128m",
+        &device,
+    ).expect("Failed to load model weights");
+    
+    let model = SundialModel::new(&config, vb)
+        .expect("Failed to create model");
+    
+    // Run inference
+    let predictions = model.generate(&input, 14, 1, false)
+        .expect("Failed to run inference");
+    
+    // Print comparison stats for debugging
+    print_comparison_stats(&predictions, &python_predictions, "Final predictions");
+    
+    // Compare with Python (relaxed tolerance for full model due to error accumulation)
+    assert_tensor_close(&predictions, &python_predictions, 1.0, "Final predictions")
+        .expect("Predictions should match Python reference");
+}
+
+/// Test that model can process various input sizes
+#[test]
+#[ignore = "Requires model weights to be available"]
+fn test_end_to_end_various_sizes() {
+    let device = Device::Cpu;
+    
+    // Test with different input sizes
+    let test_cases = vec![
+        (2880, 1),   // Full context
+        (1440, 1),   // Half context
+        (720, 1),    // Quarter context
+    ];
+    
+    for (timesteps, features) in test_cases {
+        // Create random input for this size
+        let input = Tensor::randn(0.0f32, 1.0f32, (1, timesteps, features), &device)
+            .expect("Failed to create input");
+        
+        let config = SundialConfig::default();
+        let vb = sundial_rust::model::loader::load_sundial_from_huggingface(
+            "thuml/sundial-base-128m",
+            &device,
+        ).expect("Failed to load model");
+        
+        let model = SundialModel::new(&config, vb)
+            .expect("Failed to create model");
+        
+        // Should not panic
+        let _predictions = model.generate(&input, 14, 1, false)
+            .expect("Inference should succeed");
+    }
+}

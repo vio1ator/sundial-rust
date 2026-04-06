@@ -157,6 +157,35 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Requires Python reference data to be generated first"]
+    fn test_rope_matches_python_reference() {
+        // This test compares against pre-computed Python reference tensors
+        // Run scripts/generate_reference.py --rope-only --output /tmp/rope_reference first
+        
+        use crate::testing::{load_tensor_by_name, assert_tensor_exact};
+        
+        let device = Device::Cpu;
+        
+        // Load Python reference inputs and outputs
+        let q = load_tensor_by_name("/tmp/rope_reference", "rope_q_input")
+            .expect("Failed to load rope_q_input");
+        let k = load_tensor_by_name("/tmp/rope_reference", "rope_k_input")
+            .expect("Failed to load rope_k_input");
+        let q_expected = load_tensor_by_name("/tmp/rope_reference", "rope_q_output")
+            .expect("Failed to load rope_q_output");
+        let k_expected = load_tensor_by_name("/tmp/rope_reference", "rope_k_output")
+            .expect("Failed to load rope_k_output");
+        
+        // Create RoPE and run
+        let rope = SundialRotaryEmbedding::new(64, 1000, 10000.0, &device).unwrap();
+        let (q_output, k_output) = rope.forward(&q, &k, None).unwrap();
+        
+        // Assert against Python reference
+        assert_tensor_exact(&q_output, &q_expected, "Q RoPE output").unwrap();
+        assert_tensor_exact(&k_output, &k_expected, "K RoPE output").unwrap();
+    }
+
+    #[test]
     fn test_rope_forward() {
         let device = Device::Cpu;
         let rope = SundialRotaryEmbedding::new(64, 1000, 10000.0, &device).unwrap();

@@ -35,7 +35,8 @@ candle-transformers = "0.8"
 safetensors = "0.4"
 
 # Data handling
-ndarray = "0.15"
+ndarray = "0.16"
+ndarray-npy = "0.9"
 polars = { version = "0.45", features = ["lazy", "csv", "parquet"] }
 csv = "1.3"
 

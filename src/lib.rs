@@ -7,6 +7,7 @@ pub mod assets;
 pub mod data;
 pub mod flow;
 pub mod model;
+pub mod testing;
 pub mod weights;
 
 pub use assets::*;
