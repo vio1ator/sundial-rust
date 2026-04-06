@@ -24,10 +24,11 @@ impl SundialRotaryEmbedding {
         base: f64,
         device: &candle_core::Device,
     ) -> Result<Self> {
-        // Calculate inverse frequencies: 1 / (base ^ (2i / dim))
+        // Calculate inverse frequencies: 1 / (base ^ (i / dim))
+        // Matches Python: inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
         let mut inv_freq = Vec::with_capacity(dim / 2);
         for i in (0..dim).step_by(2) {
-            let freq = base.powf(-(i as f64) / (dim as f64));
+            let freq = base.powf((i as f64) / (dim as f64));
             inv_freq.push(1.0 / freq);
         }
 

@@ -544,12 +544,16 @@ async fn run_inference(args: &Args, timestamp_col: &str, value_col: &str) -> Res
         use sundial_rust::WeightLoader;
         let loader = WeightLoader::new_with_memory_weights()
             .context("Failed to load embedded weights into memory")?;
-        
+
         // Get the decompressed weights from memory
-        let model_weights = loader.get_model_weights()
+        let model_weights = loader
+            .get_model_weights()
             .expect("Memory loader should have weights");
-        
-        info!("Loading model from {} bytes of in-memory weights", model_weights.len());
+
+        info!(
+            "Loading model from {} bytes of in-memory weights",
+            model_weights.len()
+        );
         SundialModel::load_from_safetensors_bytes(config.clone(), model_weights, &device)?
     };
 

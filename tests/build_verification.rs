@@ -482,7 +482,7 @@ fn test_full_build_verification() {
     let binary_extensions = if cfg!(windows) {
         vec![".exe"]
     } else {
-        vec![""]  // No extension on Unix-like systems
+        vec![""] // No extension on Unix-like systems
     };
 
     let mut binary_found = false;

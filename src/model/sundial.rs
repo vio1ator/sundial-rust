@@ -182,8 +182,9 @@ impl SundialModel {
     ) -> candle_core::Result<Self> {
         use crate::model::loader::load_safetensors_from_bytes;
 
-        let tensors = load_safetensors_from_bytes(data, device)
-            .map_err(|e| candle_core::Error::Msg(format!("Failed to load safetensors from bytes: {}", e)))?;
+        let tensors = load_safetensors_from_bytes(data, device).map_err(|e| {
+            candle_core::Error::Msg(format!("Failed to load safetensors from bytes: {}", e))
+        })?;
         tracing::info!("Loaded {} tensors from memory", tensors.len());
 
         // Create VarBuilder from loaded tensors with proper mapping
@@ -237,19 +238,20 @@ impl SundialModel {
                 "Model path {:?} not found, using embedded weights via WeightLoader",
                 path_ref
             );
-            let loader = WeightLoader::new()
-                .map_err(|e| {
-                    candle_core::Error::Msg(format!("Failed to create weight loader: {}", e))
-                })?;
+            let loader = WeightLoader::new().map_err(|e| {
+                candle_core::Error::Msg(format!("Failed to create weight loader: {}", e))
+            })?;
 
             // Use memory loading if available
             if let Some(weights) = loader.get_model_weights() {
                 tracing::info!("Loading embedded weights from memory");
                 // Use embedded config for memory mode
-                let config: SundialConfig = serde_json::from_slice(CONFIG_JSON)
-                    .map_err(|e| candle_core::Error::Msg(format!("Failed to parse embedded config: {}", e)))?;
-                return load_sundial_from_memory(weights, &config, device)
-                    .map_err(|e| candle_core::Error::Msg(format!("Failed to load model from memory: {}", e)));
+                let config: SundialConfig = serde_json::from_slice(CONFIG_JSON).map_err(|e| {
+                    candle_core::Error::Msg(format!("Failed to parse embedded config: {}", e))
+                })?;
+                return load_sundial_from_memory(weights, &config, device).map_err(|e| {
+                    candle_core::Error::Msg(format!("Failed to load model from memory: {}", e))
+                });
             }
 
             // Fallback to disk-based loading (SUNDIAL_USE_DISK=true mode)

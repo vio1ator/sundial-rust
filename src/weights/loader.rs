@@ -286,7 +286,7 @@ impl WeightLoader {
     }
 
     /// Get the decompressed model weights in memory
-    /// 
+    ///
     /// Returns None if weights are loaded from disk or external source.
     /// Only returns Some(bytes) if weights were decompressed into memory.
     pub fn get_model_weights(&self) -> Option<&[u8]> {
@@ -294,10 +294,10 @@ impl WeightLoader {
     }
 
     /// Create a weight loader that keeps decompressed weights in memory
-    /// 
+    ///
     /// This avoids writing to disk entirely - weights are decompressed
     /// and held in memory for direct loading by the model.
-    /// 
+    ///
     /// # Returns
     /// * `Ok(WeightLoader)` with in-memory weights
     /// * `Err(anyhow::Error)` if decompression fails
@@ -329,7 +329,7 @@ impl WeightLoader {
     }
 
     /// Check if this loader has weights in memory
-    /// 
+    ///
     /// # Returns
     /// * `true` if weights are available in memory
     /// * `false` if weights are on disk or external
@@ -338,11 +338,11 @@ impl WeightLoader {
     }
 
     /// Load weights into candle VarBuilder from memory or disk
-    /// 
+    ///
     /// This method loads the model weights into a candle VarBuilder,
     /// using in-memory weights if available, or decompressing from
     /// the embedded compressed weights otherwise.
-    /// 
+    ///
     /// # Memory Lifecycle
     ///
     /// **When `model_weights` is Some (in-memory mode):**
@@ -362,17 +362,17 @@ impl WeightLoader {
     ///
     /// # Arguments
     /// * `device` - The device to load tensors on
-    /// 
+    ///
     /// # Returns
     /// * `Ok(VarBuilder)` - A VarBuilder ready for model initialization
     /// * `Err(anyhow::Error)` if loading fails
     pub fn load_into_candle<'a>(&'a self, device: &'a Device) -> Result<candle_nn::VarBuilder<'a>> {
-        use crate::model::loader::{load_safetensors_from_bytes, create_varbuilder};
+        use crate::model::loader::{create_varbuilder, load_safetensors_from_bytes};
 
         // Get decompressed weights - either from memory or decompress on-the-fly
         let weight_bytes: &[u8];
         let mut decompressed: Option<Vec<u8>> = None;
-        
+
         if let Some(ref weights) = self.model_weights {
             // Use existing in-memory weights - no decompression needed
             weight_bytes = weights;
@@ -386,11 +386,14 @@ impl WeightLoader {
                 .context("Failed to decompress weights for loading")?;
             weight_bytes = decompressed.as_ref().unwrap();
         }
-        
+
         // Verify hash before loading
         verify_integrity_from_bytes(weight_bytes)?;
-        
-        tracing::debug!("Loaded {} bytes of decompressed weights", weight_bytes.len());
+
+        tracing::debug!(
+            "Loaded {} bytes of decompressed weights",
+            weight_bytes.len()
+        );
 
         // Load tensors from bytes - this **copies** all tensor data into Tensor-owned allocations
         // After this call returns, weight_bytes is no longer referenced
@@ -772,7 +775,7 @@ mod tests {
         let path = loader.model_path();
         assert!(path.exists(), "Model path should exist: {:?}", path);
         assert!(path.ends_with("model.safetensors"));
-        
+
         // Clean up
         std::env::remove_var("SUNDIAL_USE_DISK");
     }
@@ -791,7 +794,7 @@ mod tests {
         let path = loader.config_path();
         assert!(path.exists(), "Config path should exist: {:?}", path);
         assert!(path.ends_with("config.json"));
-        
+
         // Clean up
         std::env::remove_var("SUNDIAL_USE_DISK");
     }
@@ -809,7 +812,7 @@ mod tests {
         // Use RAII pattern to ensure cleanup happens at end of scope
         // Set SUNDIAL_USE_DISK to use disk extraction
         std::env::set_var("SUNDIAL_USE_DISK", "true");
-        
+
         {
             let loader = WeightLoader::new().expect("Failed to create weight loader");
             let temp_path = loader.model_path().parent().unwrap().to_path_buf();
@@ -831,7 +834,7 @@ mod tests {
         // But we know it was cleaned up because no panics occurred and no leaks
         #[cfg(unix)]
         tracing::info!("Temp directory cleanup verified (no leaks detected)");
-        
+
         // Clean up
         std::env::remove_var("SUNDIAL_USE_DISK");
     }
@@ -842,7 +845,7 @@ mod tests {
         // Verify cleanup happens even on panic by using scope guard pattern
         // Set SUNDIAL_USE_DISK to use disk extraction
         std::env::set_var("SUNDIAL_USE_DISK", "true");
-        
+
         let temp_path = {
             let loader = WeightLoader::new().expect("Failed to create weight loader");
             loader.model_path().parent().unwrap().to_path_buf()
@@ -856,7 +859,7 @@ mod tests {
             !temp_path.exists(),
             "Temp directory should be cleaned up after scope ends"
         );
-        
+
         // Clean up
         std::env::remove_var("SUNDIAL_USE_DISK");
     }
@@ -884,7 +887,7 @@ mod tests {
         // Custom temp directory should NOT be auto-cleaned (user responsibility)
         // For this test, we manually clean it
         let _ = fs::remove_dir_all(&custom_path);
-        
+
         // Also clean up the parent temp dir
         let _ = fs::remove_dir_all(temp_dir.path());
     }
@@ -917,16 +920,20 @@ mod tests {
     #[test]
     fn test_new_with_memory_weights() {
         // Test that we can load weights into memory without disk extraction
-        let loader = WeightLoader::new_with_memory_weights()
-            .expect("Failed to create memory weight loader");
-        
+        let loader =
+            WeightLoader::new_with_memory_weights().expect("Failed to create memory weight loader");
+
         // Verify weights are in memory
-        let weights = loader.get_model_weights()
+        let weights = loader
+            .get_model_weights()
             .expect("Memory loader should have weights");
-        
+
         assert!(!weights.is_empty(), "Weights should not be empty");
-        assert!(weights.len() > 1000000, "Weights should be substantial (>1MB)");
-        
+        assert!(
+            weights.len() > 1000000,
+            "Weights should be substantial (>1MB)"
+        );
+
         // Verify model path is marked as memory
         assert_eq!(loader.model_path(), std::path::Path::new("<memory>"));
     }
@@ -935,16 +942,21 @@ mod tests {
     #[ignore]
     fn test_has_memory_weights() {
         // Test has_memory_weights with memory loader
-        let memory_loader = WeightLoader::new_with_memory_weights()
-            .expect("Failed to create memory weight loader");
-        assert!(memory_loader.has_memory_weights(), "Memory loader should have memory weights");
+        let memory_loader =
+            WeightLoader::new_with_memory_weights().expect("Failed to create memory weight loader");
+        assert!(
+            memory_loader.has_memory_weights(),
+            "Memory loader should have memory weights"
+        );
 
         // Test has_memory_weights with disk loader - explicitly request disk mode
         std::env::set_var("SUNDIAL_USE_DISK", "true");
-        let disk_loader = WeightLoader::new()
-            .expect("Failed to create disk weight loader");
-        assert!(!disk_loader.has_memory_weights(), "Disk loader should not have memory weights");
-        
+        let disk_loader = WeightLoader::new().expect("Failed to create disk weight loader");
+        assert!(
+            !disk_loader.has_memory_weights(),
+            "Disk loader should not have memory weights"
+        );
+
         // Clean up
         std::env::remove_var("SUNDIAL_USE_DISK");
     }
@@ -954,15 +966,18 @@ mod tests {
         use candle_core::Device;
 
         // Create a memory weight loader
-        let loader = WeightLoader::new_with_memory_weights()
-            .expect("Failed to create memory weight loader");
+        let loader =
+            WeightLoader::new_with_memory_weights().expect("Failed to create memory weight loader");
 
         // Test loading into candle
         let device = Device::Cpu;
         let result = loader.load_into_candle(&device);
-        
-        assert!(result.is_ok(), "load_into_candle should succeed with valid weights");
-        
+
+        assert!(
+            result.is_ok(),
+            "load_into_candle should succeed with valid weights"
+        );
+
         let vb = result.unwrap();
         // Verify we got a valid VarBuilder (can't easily test tensors without knowing exact names)
         assert!(vb.dtype() == candle_core::DType::F32);
@@ -975,18 +990,20 @@ mod tests {
 
         // Create a disk weight loader (extracts to temp)
         std::env::set_var("SUNDIAL_USE_DISK", "true");
-        let loader = WeightLoader::new()
-            .expect("Failed to create disk weight loader");
-        
+        let loader = WeightLoader::new().expect("Failed to create disk weight loader");
+
         // Verify it doesn't have memory weights
         assert!(!loader.has_memory_weights());
 
         // Test loading into candle from disk
         let device = Device::Cpu;
         let result = loader.load_into_candle(&device);
-        
-        assert!(result.is_ok(), "load_into_candle should succeed with disk weights");
-        
+
+        assert!(
+            result.is_ok(),
+            "load_into_candle should succeed with disk weights"
+        );
+
         // Clean up
         std::env::remove_var("SUNDIAL_USE_DISK");
     }

@@ -63,29 +63,32 @@ impl SundialTransformer {
     /// # Returns
     /// Hidden states of shape [batch_size, num_patches, hidden_size]
     pub fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
-        // Debug: print input
-        if std::env::var("SUNDIAL_DEBUG").is_ok() {
-            debug_utils::debug_tensor("transformer_input", input_ids);
+        let debug_mode = std::env::var("SUNDIAL_DEBUG").is_ok();
+
+        // Debug: print and save input
+        if debug_mode {
+            debug_utils::debug_tensor("input", input_ids);
+            let _ = debug_utils::save_tensor_to_bin("input", input_ids);
         }
 
         // Patch embedding
         let mut hidden_states = self.embed_layer.forward(input_ids)?;
 
-        // Debug: print after patch embed
-        if std::env::var("SUNDIAL_DEBUG").is_ok() {
-            debug_utils::debug_tensor("transformer_after_patch_embed", &hidden_states);
+        // Debug: print and save after patch embed
+        if debug_mode {
+            debug_utils::debug_tensor("patch_embed_output", &hidden_states);
+            let _ = debug_utils::save_tensor_to_bin("patch_embed_output", &hidden_states);
         }
 
         // Pass through decoder layers
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             hidden_states = layer.forward(&hidden_states)?;
 
-            // Debug: print after each layer
-            if std::env::var("SUNDIAL_DEBUG").is_ok() {
-                debug_utils::debug_tensor(
-                    &format!("transformer_after_layer_{}", layer_idx),
-                    &hidden_states,
-                );
+            // Debug: print and save after each layer
+            if debug_mode {
+                let layer_output_name = format!("layer_{}_output", layer_idx);
+                debug_utils::debug_tensor(&layer_output_name, &hidden_states);
+                let _ = debug_utils::save_tensor_to_bin(&layer_output_name, &hidden_states);
             }
 
             // Stop after specified layer for debugging

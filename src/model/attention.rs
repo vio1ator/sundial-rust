@@ -35,6 +35,11 @@ pub struct SundialAttention {
 }
 
 impl SundialAttention {
+    /// Get the layer index
+    pub fn get_layer_idx(&self) -> Option<usize> {
+        self.layer_idx
+    }
+
     /// Create a new attention layer
     pub fn new(config: &AttentionConfig, vb: candle_nn::VarBuilder) -> Result<Self> {
         let hidden_size = config.hidden_size;

@@ -72,8 +72,11 @@ impl SundialDecoderLayer {
     /// 1. norm1 -> self-attention -> residual
     /// 2. norm2 -> MLP -> residual
     pub fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+        let debug_mode = std::env::var("SUNDIAL_DEBUG").is_ok();
+        let layer_idx = self.self_attn.get_layer_idx().unwrap_or(0);
+
         // Debug: print input
-        if std::env::var("SUNDIAL_DEBUG").is_ok() {
+        if debug_mode {
             debug_utils::debug_tensor("decoder_layer_input", hidden_states);
         }
 
@@ -83,23 +86,25 @@ impl SundialDecoderLayer {
         let normalized = self.norm1.forward(hidden_states)?;
 
         // Debug: print norm1 output
-        if std::env::var("SUNDIAL_DEBUG").is_ok() {
+        if debug_mode {
             debug_utils::debug_tensor("decoder_layer_norm1", &normalized);
         }
 
         // Self-attention
         let attn_output = self.self_attn.forward(&normalized)?;
 
-        // Debug: print attention output
-        if std::env::var("SUNDIAL_DEBUG").is_ok() {
-            debug_utils::debug_tensor("decoder_layer_attn", &attn_output);
+        // Debug: print and save attention output (matching Python naming)
+        if debug_mode {
+            let attn_name = format!("layer_{}_attention", layer_idx);
+            debug_utils::debug_tensor(&attn_name, &attn_output);
+            let _ = debug_utils::save_tensor_to_bin(&attn_name, &attn_output);
         }
 
         // Residual connection
         let hidden_states = residual.add(&attn_output)?;
 
         // Debug: print after first residual
-        if std::env::var("SUNDIAL_DEBUG").is_ok() {
+        if debug_mode {
             debug_utils::debug_tensor("decoder_layer_after_attn_residual", &hidden_states);
         }
 
@@ -108,22 +113,24 @@ impl SundialDecoderLayer {
         let normalized = self.norm2.forward(&hidden_states)?;
 
         // Debug: print norm2 output
-        if std::env::var("SUNDIAL_DEBUG").is_ok() {
+        if debug_mode {
             debug_utils::debug_tensor("decoder_layer_norm2", &normalized);
         }
 
         let ffn_output = self.ffn.forward(&normalized)?;
 
         // Debug: print MLP output
-        if std::env::var("SUNDIAL_DEBUG").is_ok() {
+        if debug_mode {
             debug_utils::debug_tensor("decoder_layer_mlp", &ffn_output);
         }
 
         let hidden_states = residual.add(&ffn_output)?;
 
-        // Debug: print output
-        if std::env::var("SUNDIAL_DEBUG").is_ok() {
-            debug_utils::debug_tensor("decoder_layer_output", &hidden_states);
+        // Debug: print and save output (matching Python naming)
+        if debug_mode {
+            let output_name = format!("layer_{}_output", layer_idx);
+            debug_utils::debug_tensor(&output_name, &hidden_states);
+            let _ = debug_utils::save_tensor_to_bin(&output_name, &hidden_states);
         }
 
         Ok(hidden_states)

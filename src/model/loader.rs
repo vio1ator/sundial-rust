@@ -136,15 +136,15 @@ pub fn load_safetensors_from_bytes(
 ) -> Result<HashMap<String, Tensor>> {
     // Use safetensors crate directly to parse from memory
     use safetensors::SafeTensors;
-    
+
     let safetensor = SafeTensors::deserialize(data)
         .map_err(|e| anyhow::anyhow!("Failed to parse safetensors: {}", e))?;
-    
+
     let mut tensors = HashMap::new();
-    
+
     // Get list of tensors
     let tensor_list = safetensor.tensors();
-    
+
     for (tensor_name, tensor) in tensor_list {
         // Get shape and dtype
         let shape: Vec<usize> = tensor.shape().to_vec();
@@ -155,10 +155,10 @@ pub fn load_safetensors_from_bytes(
             safetensors::Dtype::I64 => candle_core::DType::I64,
             _ => anyhow::bail!("Unsupported dtype: {:?}", tensor.dtype()),
         };
-        
+
         // Get raw data - this is a borrow into the input `data` buffer
         let data_ptr = tensor.data();
-        
+
         // Convert to candle tensor
         // CRITICAL: Must copy data because:
         // 1. safetensors borrows the input buffer (data_ptr is a slice into `data`)
@@ -177,10 +177,12 @@ pub fn load_safetensors_from_bytes(
             candle_core::DType::F64 => {
                 let f64_data: Vec<f64> = tensor_data
                     .chunks(8)
-                    .map(|chunk| f64::from_le_bytes([
-                        chunk[0], chunk[1], chunk[2], chunk[3],
-                        chunk[4], chunk[5], chunk[6], chunk[7],
-                    ]))
+                    .map(|chunk| {
+                        f64::from_le_bytes([
+                            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
+                            chunk[7],
+                        ])
+                    })
                     .collect();
                 // Tensor::from_vec takes ownership of f64_data
                 Tensor::from_vec(f64_data, shape.as_slice(), device)?
@@ -192,21 +194,23 @@ pub fn load_safetensors_from_bytes(
             candle_core::DType::I64 => {
                 let i64_data: Vec<i64> = tensor_data
                     .chunks(8)
-                    .map(|chunk| i64::from_le_bytes([
-                        chunk[0], chunk[1], chunk[2], chunk[3],
-                        chunk[4], chunk[5], chunk[6], chunk[7],
-                    ]))
+                    .map(|chunk| {
+                        i64::from_le_bytes([
+                            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
+                            chunk[7],
+                        ])
+                    })
                     .collect();
                 // Tensor::from_vec takes ownership of i64_data
                 Tensor::from_vec(i64_data, shape.as_slice(), device)?
             }
             _ => anyhow::bail!("Unsupported dtype for tensor {}: {:?}", tensor_name, dtype),
         };
-        
+
         // Each tensor now owns its data independently
         tensors.insert(tensor_name.to_string(), candle_tensor);
     }
-    
+
     // At this point, all tensor data has been copied into tensor-owned allocations.
     // The input `data` buffer is no longer referenced and can be dropped.
     tracing::info!("Loaded {} tensors from memory", tensors.len());
@@ -399,16 +403,17 @@ pub fn load_sundial_from_memory(
 
     // Construct the Sundial model - takes ownership of VarBuilder
     // At this point, tensors are fully owned by the model, weights buffer can be dropped
-    crate::model::SundialModel::new(config, vb).map_err(|e| anyhow::anyhow!("Failed to create Sundial model: {}", e))
+    crate::model::SundialModel::new(config, vb)
+        .map_err(|e| anyhow::anyhow!("Failed to create Sundial model: {}", e))
 }
 
 /// Helper function to verify integrity from bytes
-/// 
+///
 /// This is a convenience wrapper that re-exports the verification function
 /// from the weights loader module.
 fn verify_integrity_from_bytes(weights: &[u8]) -> Result<()> {
-    use sha2::{Digest, Sha256};
     use crate::assets::MODEL_SHA256;
+    use sha2::{Digest, Sha256};
 
     let mut hasher = Sha256::new();
     hasher.update(weights);
@@ -527,20 +532,21 @@ mod tests {
         use crate::weights::loader::WeightLoader;
 
         // Get weights from memory loader
-        let loader = WeightLoader::new_with_memory_weights()
-            .expect("Failed to create memory weight loader");
-        let weights = loader.get_model_weights()
+        let loader =
+            WeightLoader::new_with_memory_weights().expect("Failed to create memory weight loader");
+        let weights = loader
+            .get_model_weights()
             .expect("Memory loader should have weights");
 
         // Load tensors from bytes
         let device = Device::Cpu;
         let result = load_safetensors_from_bytes(weights, &device);
-        
+
         assert!(result.is_ok(), "load_safetensors_from_bytes should succeed");
-        
+
         let tensors = result.unwrap();
         assert!(!tensors.is_empty(), "Should have loaded some tensors");
-        
+
         // Check for some expected tensor names (with model. prefix as in the safetensors file)
         assert!(tensors.contains_key("model.embed_layer.hidden_layer.weight"));
         assert!(tensors.contains_key("model.layers.0.self_attn.q_proj.weight"));
@@ -551,29 +557,31 @@ mod tests {
         use crate::weights::loader::WeightLoader;
 
         // Get weights from memory loader
-        let loader = WeightLoader::new_with_memory_weights()
-            .expect("Failed to create memory weight loader");
-        let weights = loader.get_model_weights()
+        let loader =
+            WeightLoader::new_with_memory_weights().expect("Failed to create memory weight loader");
+        let weights = loader
+            .get_model_weights()
             .expect("Memory loader should have weights");
 
         // Load tensors and create varbuilder
         let device = Device::Cpu;
-        let tensors = load_safetensors_from_bytes(weights, &device)
-            .expect("Failed to load tensors");
+        let tensors =
+            load_safetensors_from_bytes(weights, &device).expect("Failed to load tensors");
         let result = create_varbuilder(tensors, &device);
-        
+
         assert!(result.is_ok(), "create_varbuilder should succeed");
     }
 
     #[test]
     fn test_load_sundial_from_memory() {
-        use crate::weights::loader::WeightLoader;
         use crate::model::config::SundialConfig;
+        use crate::weights::loader::WeightLoader;
 
         // Get weights from memory loader
-        let loader = WeightLoader::new_with_memory_weights()
-            .expect("Failed to create memory weight loader");
-        let weights = loader.get_model_weights()
+        let loader =
+            WeightLoader::new_with_memory_weights().expect("Failed to create memory weight loader");
+        let weights = loader
+            .get_model_weights()
             .expect("Memory loader should have weights");
 
         // Create config
@@ -582,12 +590,15 @@ mod tests {
 
         // Load model from memory
         let result = load_sundial_from_memory(weights, &config, &device);
-        
+
         assert!(result.is_ok(), "load_sundial_from_memory should succeed");
-        
+
         let model = result.unwrap();
         // Just verify we got a model - can't access private fields
-        assert!(model.config().hidden_size > 0, "Model should have valid config");
+        assert!(
+            model.config().hidden_size > 0,
+            "Model should have valid config"
+        );
     }
 
     #[test]
@@ -595,14 +606,18 @@ mod tests {
         use crate::weights::loader::WeightLoader;
 
         // Get weights from memory loader
-        let loader = WeightLoader::new_with_memory_weights()
-            .expect("Failed to create memory weight loader");
-        let weights = loader.get_model_weights()
+        let loader =
+            WeightLoader::new_with_memory_weights().expect("Failed to create memory weight loader");
+        let weights = loader
+            .get_model_weights()
             .expect("Memory loader should have weights");
 
         // Verify should pass with valid weights
         let result = verify_integrity_from_bytes(weights);
-        assert!(result.is_ok(), "Hash verification should pass for valid weights");
+        assert!(
+            result.is_ok(),
+            "Hash verification should pass for valid weights"
+        );
     }
 
     #[test]
@@ -612,9 +627,15 @@ mod tests {
 
         // Verify should fail
         let result = verify_integrity_from_bytes(corrupted);
-        assert!(result.is_err(), "Hash verification should fail for corrupted data");
-        
+        assert!(
+            result.is_err(),
+            "Hash verification should fail for corrupted data"
+        );
+
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("mismatch"), "Error should mention hash mismatch");
+        assert!(
+            error_msg.contains("mismatch"),
+            "Error should mention hash mismatch"
+        );
     }
 }
