@@ -160,20 +160,20 @@ mod tests {
     #[ignore = "Requires Python reference data to be generated first"]
     fn test_rope_matches_python_reference() {
         // This test compares against pre-computed Python reference tensors
-        // Run scripts/generate_reference.py --rope-only --output /tmp/rope_reference first
+        // Run scripts/generate_reference_standalone.py --output tests/reference_data/rope/
         
         use crate::testing::{load_tensor_by_name, assert_tensor_exact};
         
         let device = Device::Cpu;
         
         // Load Python reference inputs and outputs
-        let q = load_tensor_by_name("/tmp/rope_reference", "rope_q_input")
+        let q = load_tensor_by_name("tests/reference_data/rope", "rope_q_input")
             .expect("Failed to load rope_q_input");
-        let k = load_tensor_by_name("/tmp/rope_reference", "rope_k_input")
+        let k = load_tensor_by_name("tests/reference_data/rope", "rope_k_input")
             .expect("Failed to load rope_k_input");
-        let q_expected = load_tensor_by_name("/tmp/rope_reference", "rope_q_output")
+        let q_expected = load_tensor_by_name("tests/reference_data/rope", "rope_q_output")
             .expect("Failed to load rope_q_output");
-        let k_expected = load_tensor_by_name("/tmp/rope_reference", "rope_k_output")
+        let k_expected = load_tensor_by_name("tests/reference_data/rope", "rope_k_output")
             .expect("Failed to load rope_k_output");
         
         // Create RoPE and run

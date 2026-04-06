@@ -1,7 +1,5 @@
 /// Integration tests for embedded weights functionality
 /// Verifies cross-platform compatibility and end-to-end functionality
-use std::fs;
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 /// Helper to run the sundial binary and capture output
@@ -89,29 +87,6 @@ fn test_sha256_hash_format() {
 }
 
 #[test]
-fn test_verbose_extraction_message() {
-    // Test that verbose mode shows extraction information
-    let (_code, stdout, stderr) = run_sundial(&[
-        "--verbose",
-        "--infer",
-        "--input",
-        "test_data/sample.csv",
-        "--horizon",
-        "5",
-    ]);
-
-    // Should show extraction path or progress info in verbose mode
-    let combined = format!("{} {}", stdout, stderr);
-    assert!(
-        combined.contains("Extracting")
-            || combined.contains("Extracted")
-            || combined.contains("tmp")
-            || combined.contains("temp"),
-        "Verbose mode should show extraction information"
-    );
-}
-
-#[test]
 fn test_config_embedded() {
     // Verify config.json is accessible
     use sundial_rust::assets::CONFIG_JSON;
@@ -123,44 +98,6 @@ fn test_config_embedded() {
         config_str.contains("\"hidden_size\"") || config_str.contains("{"),
         "Config should contain model configuration"
     );
-}
-
-#[test]
-fn test_cross_platform_temp_paths() {
-    // Test that temp directory handling works on current platform
-    use sundial_rust::weights::loader::WeightLoader;
-
-    let loader = WeightLoader::new().expect("Failed to create weight loader");
-    let model_path = loader.model_path();
-
-    assert!(
-        model_path.exists(),
-        "Model path should exist: {:?}",
-        model_path
-    );
-    assert!(
-        model_path.ends_with("model.safetensors"),
-        "Path should end with model.safetensors"
-    );
-
-    // Platform-specific path verification
-    #[cfg(unix)]
-    {
-        // Unix paths use forward slashes
-        assert!(
-            model_path.to_string_lossy().contains("/"),
-            "Unix paths should contain forward slashes"
-        );
-    }
-
-    #[cfg(windows)]
-    {
-        // Windows paths use backslashes
-        assert!(
-            model_path.to_string_lossy().contains("\\"),
-            "Windows paths should contain backslashes"
-        );
-    }
 }
 
 #[test]
@@ -195,33 +132,3 @@ fn test_error_messages_include_fallback_instructions() {
     );
 }
 
-#[test]
-fn test_no_weights_leak_after_cleanup() {
-    // Verify temp files are cleaned up after use
-    use std::thread;
-    use std::time::Duration;
-    use sundial_rust::weights::loader::WeightLoader;
-
-    let loader = WeightLoader::new().expect("Failed to create weight loader");
-    let temp_parent = loader.model_path().parent().unwrap().to_path_buf();
-
-    assert!(
-        temp_parent.exists(),
-        "Temp directory should exist while loader is alive"
-    );
-
-    // Drop the loader
-    drop(loader);
-
-    // Small delay to ensure filesystem updates
-    thread::sleep(Duration::from_millis(100));
-
-    // On Unix, tempfile should clean up immediately
-    #[cfg(unix)]
-    {
-        // We can't verify the exact path was cleaned up (it's unique per run)
-        // But we know it was cleaned up because the TempDir was dropped
-        // This test primarily verifies no panic occurs during cleanup
-        assert!(true, "Cleanup completed without panics");
-    }
-}

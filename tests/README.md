@@ -213,44 +213,112 @@ cargo test --test correctness
 
 ## CI/CD Integration
 
-Add to `.github/workflows/correctness-tests.yml`:
+GitHub Actions workflow is configured in `.github/workflows/correctness-tests.yml`:
 
 ```yaml
 name: Correctness Tests
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
   correctness:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
     steps:
-      - uses: actions/checkout@v3
-      
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.9'
-      
+
       - name: Install Python dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install torch numpy safetensors transformers
-      
-      - name: Generate Python reference
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Generate RoPE reference data
         run: |
           python scripts/generate_reference.py \
-            --input tests/test_input.npy \
-            --output /tmp/python_reference/
-      
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-      
-      - name: Run correctness tests
+            --output tests/reference_data/rope/ \
+            --rope-only
+
+      - name: Run RoPE correctness test
         run: |
-          cargo test --test correctness
-          cargo test --test layer_correctness
+          cargo test --lib model::rope::tests::test_rope_matches_python_reference -- --nocapture
+
+      - name: Run unit tests for testing infrastructure
+        run: |
+          cargo test --lib testing::
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Run unit tests
+        run: cargo test --lib
 ```
+
+### Workflow Features
+
+- **Automated on push/PR to main**: Tests run automatically on every push or pull request
+- **RoPE reference generation**: Generates RoPE-specific reference tensors in CI
+- **RoPE correctness test**: Runs the RoPE test against generated references
+- **Testing infrastructure tests**: Validates the testing utilities themselves
+- **Build job**: Separately builds and runs all unit tests
+- **Caching**: Rust dependencies cached for faster builds
+- **Timeout limits**: 30 min for correctness, 15 min for build
+
+### Git LFS Setup for Reference Data
+
+Reference tensors can be large (MBs each), so they should be stored using Git LFS:
+
+```bash
+# Install Git LFS (one-time setup)
+git lfs install
+
+# Track reference data files
+git lfs track "tests/reference_data/*.npy"
+git lfs track "tests/reference_data/**/*.npy"
+
+# Add .gitattributes to version control
+git add .gitattributes
+
+# Add reference data
+git add tests/reference_data/
+git commit -m "Add Python reference tensors"
+```
+
+The `.gitattributes` file is already configured to track:
+- `tests/reference_data/*.npy` - All reference tensors
+- `model_cache/**` - Cached model files
+- `test_cache/**` - Test cache files
+- `weights/**/*.safetensors` - Model weights
 
 ## Test Data Management
 

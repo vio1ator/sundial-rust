@@ -1,0 +1,16 @@
+{
+  "dim": 64,
+  "max_position": 1000,
+  "base": 10000.0,
+  "batch_size": 2,
+  "num_heads": 4,
+  "seq_len": 10,
+  "tensor_names": [
+    "rope_q_input",
+    "rope_k_input",
+    "rope_q_output",
+    "rope_k_output",
+    "rope_cos",
+    "rope_sin"
+  ]
+}
