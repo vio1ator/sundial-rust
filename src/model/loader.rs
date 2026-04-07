@@ -484,9 +484,9 @@ pub fn map_var_path_to_safetensor(var_path: &str) -> String {
         return format!("flow_loss.net.{}", rest);
     }
 
-    // For model, keep as-is (already has correct prefix)
-    if name.starts_with("model.") {
-        return name.to_string();
+    // For model components (embed_layer, layers, norm), add 'model.' prefix
+    if !name.starts_with("model.") && !name.starts_with("flow_loss.") {
+        return format!("model.{}", name);
     }
 
     name.to_string()

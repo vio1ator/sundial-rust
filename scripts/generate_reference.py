@@ -20,7 +20,7 @@ from pathlib import Path
 
 # Try to import Sundial model - adjust import path as needed
 try:
-    from sundial.model import SundialModel
+    from sundial_model.modeling_sundial import SundialModel
     from transformers import AutoConfig
 except ImportError as e:
     print(f"Warning: Could not import Sundial model: {e}")
@@ -31,8 +31,8 @@ except ImportError as e:
 
 def load_sundial_model(model_name="thuml/sundial-base-128m"):
     """Load the Sundial model from Hugging Face"""
-    config = AutoConfig.from_pretrained(model_name)
-    model = SundialModel.from_config(config)
+    config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+    model = SundialModel(config)
     model.eval()
     return model
 
@@ -65,6 +65,10 @@ def generate_reference(input_path, output_dir, model_name="thuml/sundial-base-12
     input_data = np.load(input_path)
     input_tensor = torch.from_numpy(input_data).float()
     
+    # Squeeze if needed (input may be [1, 2880, 1], we want [1, 2880])
+    if len(input_tensor.shape) == 3:
+        input_tensor = input_tensor.squeeze(-1)
+    
     print(f"Input shape: {input_tensor.shape}")
     
     # Create storage for intermediates
@@ -74,21 +78,21 @@ def generate_reference(input_path, output_dir, model_name="thuml/sundial-base-12
     print("Registering hooks...")
     
     # Patch embedding layer
-    if hasattr(model, 'model') and hasattr(model.model, 'embed_layer'):
-        model.model.embed_layer.register_forward_hook(
+    if hasattr(model, 'embed_layer'):
+        model.embed_layer.register_forward_hook(
             make_hook(intermediates, 'patch_embed_output')
         )
     
     # All decoder layers
-    if hasattr(model, 'model') and hasattr(model.model, 'layers'):
-        for i in range(len(model.model.layers)):
-            model.model.layers[i].register_forward_hook(
+    if hasattr(model, 'layers'):
+        for i in range(len(model.layers)):
+            model.layers[i].register_forward_hook(
                 make_hook(intermediates, f'layer_{i}_output')
             )
     
     # Final layer norm
-    if hasattr(model, 'model') and hasattr(model.model, 'norm'):
-        model.model.norm.register_forward_hook(
+    if hasattr(model, 'norm'):
+        model.norm.register_forward_hook(
             make_hook(intermediates, 'transformer_output')
         )
     
@@ -97,8 +101,10 @@ def generate_reference(input_path, output_dir, model_name="thuml/sundial-base-12
     with torch.no_grad():
         output = model(input_tensor)
     
-    # Save predictions
-    if isinstance(output, tuple):
+    # Save predictions - output is MoeModelOutputWithPast
+    if hasattr(output, 'last_hidden_state'):
+        intermediates['predictions'] = output.last_hidden_state.detach().cpu().numpy()
+    elif isinstance(output, tuple):
         intermediates['predictions'] = output[0].detach().cpu().numpy()
     else:
         intermediates['predictions'] = output.detach().cpu().numpy()
@@ -121,8 +127,8 @@ def generate_reference(input_path, output_dir, model_name="thuml/sundial-base-12
     metadata = {
         'model_name': model_name,
         'input_shape': input_tensor.shape,
-        'output_shape': output.shape if hasattr(output, 'shape') else output[0].shape,
-        'num_layers': len(model.model.layers) if hasattr(model.model, 'layers') else 0,
+        'output_shape': output.last_hidden_state.shape if hasattr(output, 'last_hidden_state') else output.shape,
+        'num_layers': len(model.layers) if hasattr(model, 'layers') else 0,
         'tensor_names': list(intermediates.keys()),
     }
     
