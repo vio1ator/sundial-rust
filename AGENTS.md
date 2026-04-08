@@ -80,17 +80,41 @@ sundial-rust/
 - Define constants as `pub const NAME: &str = env!("VAR")` for strings
 - Define constants as `pub const NAME: &[u8] = include_bytes!(...)` for binary data
 
-## Key Conventions
+### Sundial Model Architecture
+- **Generative** time series foundation model with flow matching
+- **Patch-based tokenization**: Input sequences divided into patches (default: 16 timesteps per patch)
+- **Decoder-only Transformer**: Causal attention with FlashAttention optimization
+- **TimeFlow Loss**: Parameterized loss modeling per-token probability distributions
+- **RevIN**: Reversible Instance Normalization for stable training/inference
+- **Probabilistic forecasting**: Generate multiple plausible predictions via flow matching
 
-### Error Handling
-- Use `anyhow::Result` for application-level errors
-- Use `thiserror` for library-specific error types
-- Always return `Result` types from fallible operations
+### Model API
 
-### Logging
-- Use `tracing` crate for structured logging
-- Use appropriate span levels: `info!`, `debug!`, `warn!`, `error!`
-- Include contextual information in log messages
+```rust
+// Load model with embedded weights
+use sundial_rust::SundialModel;
+use candle_core::Device;
+
+let config = SundialConfig::sundial_base_128m();
+let device = Device::Cpu;
+let model = SundialModel::load_from_safetensors(config, "path/to/weights", &device)?;
+
+// Generate forecasts
+let input = Tensor::randn(0.0, 1.0, (1, 2880), &device)?; // [batch, lookback]
+let predictions = model.generate(
+    &input,
+    720,        // forecast length
+    20,         // number of samples
+    true,       // use RevIN normalization
+)?;
+// Output shape: [batch, num_samples, forecast_length]
+```
+
+### Flow Matching Sampling
+- Uses Euler integration for sample generation
+- Number of sampling steps controlled by `num_sampling_steps` (default: 50)
+- Each sample follows: `x = x + (velocity - noise) * dt`
+- Output provides diverse probabilistic forecasts from the same condition
 
 ### Tensor Operations
 - Use `candle-core`, `candle-nn`, `candle-transformers` for all ML operations
