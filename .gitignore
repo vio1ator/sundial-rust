@@ -34,3 +34,6 @@ Thumbs.db
 
 # Test cache (large model files)
 /test_cache/
+
+# Model cache
+/model_cache/
