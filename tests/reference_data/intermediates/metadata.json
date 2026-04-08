@@ -1,0 +1,31 @@
+{
+  "model_name": "sundial-base-128m",
+  "input_shape": [
+    1,
+    2880
+  ],
+  "output_shape": [
+    1,
+    180,
+    768
+  ],
+  "num_layers": 12,
+  "tensor_names": [
+    "patch_embed_output",
+    "layer_0_output",
+    "layer_1_output",
+    "layer_2_output",
+    "layer_3_output",
+    "layer_4_output",
+    "layer_5_output",
+    "layer_6_output",
+    "layer_7_output",
+    "layer_8_output",
+    "layer_9_output",
+    "layer_10_output",
+    "layer_11_output",
+    "transformer_output",
+    "predictions",
+    "input"
+  ]
+}

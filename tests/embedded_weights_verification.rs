@@ -131,4 +131,3 @@ fn test_error_messages_include_fallback_instructions() {
         "Disk error should suggest SUNDIAL_TEMP_DIR or --model"
     );
 }
-

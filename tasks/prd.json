@@ -1,0 +1,147 @@
+{
+  "name": "Fix End-to-End Test Discrepancies Between Rust and Python Sundial Implementations",
+  "description": "Systematically investigate and fix the root causes of discrepancies between Rust and Python Sundial model implementations to achieve parity across all model components.",
+  "branchName": "ralph/fix-e2e-test-discrepancies",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Set up systematic comparison framework",
+      "description": "As a developer, I want a structured comparison framework that outputs detailed statistics for each model component so that I can identify where discrepancies occur.",
+      "acceptanceCriteria": [
+        "Create test that compares Rust vs Python outputs at each model layer",
+        "Output max_diff, mean_diff, and std_diff for each component",
+        "Generate comparison reports for: patch_embed, each RoPE layer, each block, flow matching",
+        "Test currently fails with discrepancies as shown in PLAN.md",
+        "cargo test passes",
+        "cargo clippy passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Investigate patch embed layer",
+      "description": "As a developer, I want to verify the patch embedding layer produces identical outputs so that I can rule it out as a source of discrepancy.",
+      "acceptanceCriteria": [
+        "Compare patch_embed output between Rust and Python",
+        "Verify weight loading matches exactly (same values, same shapes)",
+        "Verify projection operation produces identical results",
+        "Document findings with specific metrics",
+        "cargo test passes",
+        "cargo clippy passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Investigate RoPE implementation",
+      "description": "As a developer, I want to verify the Rotary Positional Embedding implementation so that I can confirm or rule out it as the primary source of discrepancy.",
+      "acceptanceCriteria": [
+        "Compare RoPE calculations layer by layer",
+        "Verify frequency calculations match Python implementation",
+        "Verify rotation matrix computation is identical",
+        "Check for any differences in tensor ordering or broadcasting",
+        "Document specific discrepancies found",
+        "cargo test passes",
+        "cargo clippy passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Investigate layer blocks",
+      "description": "As a developer, I want to verify each transformer block produces matching outputs so that I can identify which specific blocks diverge.",
+      "acceptanceCriteria": [
+        "Compare each block's attention mechanism output",
+        "Compare each block's feed-forward network output",
+        "Verify layer normalization is applied identically",
+        "Check for residual connection implementation differences",
+        "Document per-block discrepancy metrics",
+        "cargo test passes",
+        "cargo clippy passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Investigate flow matching head",
+      "description": "As a developer, I want to verify the flow matching head produces correct outputs so that I can ensure the final layer is not causing discrepancies.",
+      "acceptanceCriteria": [
+        "Compare flow matching head output between implementations",
+        "Verify final projection weights match",
+        "Check for any activation function differences",
+        "Document final output discrepancy metrics",
+        "cargo test passes",
+        "cargo clippy passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Fix identified discrepancies",
+      "description": "As a developer, I want to fix all identified discrepancies so that the end-to-end test passes with acceptable tolerance levels.",
+      "acceptanceCriteria": [
+        "Apply fixes based on investigation findings",
+        "Verify max_diff < 1.0 and mean_diff < 0.5",
+        "Ensure all intermediate layers match within tolerance",
+        "Run full test suite to confirm no regressions",
+        "cargo test passes",
+        "cargo clippy passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Add regression tests",
+      "description": "As a developer, I want to add regression tests that catch future discrepancies early so that parity is maintained.",
+      "acceptanceCriteria": [
+        "Create automated tests that compare Rust vs Python outputs",
+        "Set appropriate thresholds for max_diff and mean_diff",
+        "Add CI integration to run comparison tests",
+        "Document debugging procedures for future investigations",
+        "cargo test passes",
+        "cargo clippy passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-006"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-04-06T10:53:16.782Z"
+  }
+}

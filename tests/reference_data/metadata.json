@@ -1,0 +1,11 @@
+{
+  "model_name": "thuml/sundial-base-128m",
+  "input_shape": [
+    1,
+    2880,
+    1
+  ],
+  "output_shape": [
+    14
+  ]
+}
